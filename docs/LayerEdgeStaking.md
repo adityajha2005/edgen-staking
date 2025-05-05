@@ -58,22 +58,6 @@ The contract uses a Fenwick Tree (Binary Indexed Tree) data structure to efficie
 2. Calculate tier boundaries
 3. Handle tier transitions when users join or leave
 
-```
-            Fenwick Tree Structure
-            
-            ┌─────┐
-            │Root │
-            └─────┘
-           /       \
-      ┌─────┐     ┌─────┐
-      │Node1│     │Node2│
-      └─────┘     └─────┘
-     /     \     /     \
- ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐
- │Leaf1│ │Leaf2│ │Leaf3│ │Leaf4│ ... (User positions)
- └─────┘ └─────┘ └─────┘ └─────┘
-```
-
 This allows for O(log n) time complexity for:
 - Updating a user's status (join/leave)
 - Finding the rank of a user
@@ -155,7 +139,9 @@ Where:
 
 ### Tier Transitions
 
-When users join or leave, tier boundaries may change, affecting other users:
+When users join or leave, tier boundaries may change, affecting other users. Let's look at some concrete examples:
+
+#### Example 1: Adding a New User Without Tier Changes
 
 ```
            Before: 10 users                 After: 11 users
@@ -164,14 +150,58 @@ When users join or leave, tier boundaries may change, affecting other users:
 │(2 users)│(3 users)│(5 users)  │   │(2 users)│(3 users)│(6 users)  │
 └────────┴────────┴────────────┘   └────────┴────────┴────────────┘
   1  2    3  4  5   6  7  8  9 10    1  2    3  4  5   6  7  8  9 10 11
-                                                             ↑
-                                                        New User
+                                                          
 ```
+
+In this example:
+- Initially, there are 10 users with 2 in Tier 1, 3 in Tier 2, and 5 in Tier 3
+- When the 11th user joins, they are added to Tier 3
+- No existing user changes tiers because the tier boundaries remain at the same positions:
+  - Tier 1: 20% of 11 = 2.2, rounded down to 2 users
+  - Tier 2: 30% of 11 = 3.3, rounded down to 3 users
+  - Tier 3: Remaining 6 users
+
+#### Example 2: User Joining Causes Tier Promotion
+
+```
+           Before: 5 users                    After: 7 users
+┌────────┬────────┬────────────┐   ┌────────┬────────┬────────────┐
+│ Tier 1 │ Tier 2 │   Tier 3   │   │ Tier 1 │ Tier 2 │   Tier 3   │
+│(1 user) │(1 user) │(3 users)  │   │(1 user) │(2 users)│(4 users)  │
+└────────┴────────┴────────────┘   └────────┴────────┴────────────┘
+   1       2         3  4  5         1        2  3      4  5  6  7
+                                                 ↑
+                                            User #3
+                                        moves from Tier 3
+                                            to Tier 2
+```
+
+In this example:
+- With 5 users, the tier calculation works out to:
+  - Tier 1: 20% of 5 = 1 user (User #1)
+  - Tier 2: 30% of 5 = 1.5, rounded down to 1 user (User #2)
+  - Tier 3: Remaining 3 users (Users #3, #4, #5)
+- When both User #6 and User #7 join, the tier boundaries shift:
+  - Tier 1: 20% of 7 = 1.4, rounded down to 1 user
+  - Tier 2: 30% of 7 = 2.1, rounded down to 2 users
+  - Tier 3: Remaining 4 users
+- This causes:
+  - User #1 remains in Tier 1
+  - User #2 remains in Tier 2
+  - User #3 moves from Tier 3 to Tier 2 (promotion)
+  - Users #4 and #5 remain in Tier 3
+  - Users #6 and #7 join as Tier 3
+
+This example demonstrates how a user (User #3) can move from Tier 3 to Tier 2 when new users join, due to the recalculation of tier boundaries as the total number of users increases. With 7 total users, the tier 2 allocation naturally increases to 2 users without any special minimum rules being applied.
+
+
 
 When a user joins or leaves, the contract:
 1. Calculates new tier boundaries
 2. Identifies any users crossing tier boundaries
 3. Records tier changes for affected users
+
+Note: When a user joins or leaves the system, at most two people's tier will be changed and the method `_checkBoundariesAndRecord` will find exactly whose boundary is going to change and record them.
 
 ## Administrative Functions
 
@@ -259,3 +289,14 @@ The contract uses OpenZeppelin's UUPS (Universal Upgradeable Proxy Standard) pat
 - Logic contract can be upgraded while preserving state
 - Upgrades can only be performed by the contract owner
 - The `initialize` function replaces the constructor
+
+## Conclusion
+
+The LayerEdgeStaking contract provides a sophisticated tiered staking system that rewards early adopters and long-term stakers with higher APY rates. The use of a Fenwick Tree data structure enables efficient tracking of user positions and tier boundaries, making the system scalable to a large number of stakers.
+
+Key functionalities of the contract include:
+- First-come-first-serve incentive structure that rewards early adopters
+- Dynamic tier reallocation that adapts to changing user participation
+- Efficient implementation that can handle large numbers of stakers
+- Comprehensive rewards tracking and tier history for accurate interest calculations
+- Upgradeable architecture for future enhancements
