@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {Script} from "forge-std/Script.sol";
-import {LayerEdgeToken} from "@src/LayerEdgeToken.sol";
+import {LayerEdgeToken} from "@test/mock/LayerEdgeToken.sol";
 
 contract DeployLayerEdgeToken is Script {
     function run() public returns (LayerEdgeToken) {

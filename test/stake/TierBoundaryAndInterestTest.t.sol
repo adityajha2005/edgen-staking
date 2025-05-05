@@ -7,7 +7,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {DeployLayerEdgeStaking} from "@script/DeployLayerEdgeStaking.s.sol";
 import {NetworkConfig, HelperConfig} from "@script/HelperConfig.s.sol";
-import {LayerEdgeToken} from "@src/LayerEdgeToken.sol";
+import {LayerEdgeToken} from "@test/mock/LayerEdgeToken.sol";
 
 contract TierBoundaryAndInterestTest is Test {
     LayerEdgeStaking public implementation;

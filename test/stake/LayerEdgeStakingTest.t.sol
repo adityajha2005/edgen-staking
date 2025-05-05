@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
 import {console2} from "forge-std/console2.sol";
 import {LayerEdgeStaking} from "@src/stake/LayerEdgeStaking.sol";
-import {LayerEdgeToken} from "@src/LayerEdgeToken.sol";
+import {LayerEdgeToken} from "@test/mock/LayerEdgeToken.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {DeployLayerEdgeStaking} from "@script/DeployLayerEdgeStaking.s.sol";
 import {NetworkConfig, HelperConfig} from "@script/HelperConfig.s.sol";

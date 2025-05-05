@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import {Script} from "forge-std/Script.sol";
 import {DeployLayerEdgeToken} from "@script/DeployLayerEdgeToken.s.sol";
-import {LayerEdgeToken} from "@src/LayerEdgeToken.sol";
+import {LayerEdgeToken} from "@test/mock/LayerEdgeToken.sol";
 
 struct NetworkConfig {
     address stakingToken;
