@@ -1,0 +1,743 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {FenwickTree} from "@src/library/FenwickTree.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+
+/**
+ * @title LayerEdgeStaking
+ * @notice Tiered staking contract with different APY rates based on staking position
+ * @dev Implements a first-come-first-serve tiered system with different rewards
+ */
+contract LayerEdgeStaking is
+    Initializable,
+    UUPSUpgradeable,
+    OwnableUpgradeable,
+    PausableUpgradeable,
+    ReentrancyGuardUpgradeable
+{
+    using FenwickTree for FenwickTree.Tree;
+
+    // Tier enum
+    enum Tier {
+        None,
+        Tier1,
+        Tier2,
+        Tier3
+    }
+
+    // Constants
+    uint256 public constant SECONDS_IN_YEAR = 365 days;
+    uint256 public constant PRECISION = 1e18;
+    uint256 public constant UNSTAKE_WINDOW = 7 days;
+    // $100 worth of EDGEN (~3k tokens)
+    uint256 public constant MAX_USERS = 100_000_000;
+
+    // Tier percentages
+    uint256 public constant TIER1_PERCENTAGE = 20; // First 20% of stakers
+    uint256 public constant TIER2_PERCENTAGE = 30; // Next 30% of stakers
+
+    // APY rates for tiers (can be changed by admin)
+    uint256 public tier1APY;
+    uint256 public tier2APY;
+    uint256 public tier3APY;
+
+    // ERC20 token being staked
+    IERC20 public stakingToken;
+
+    // Events
+    event Staked(address indexed user, uint256 amount, Tier tier);
+    event Unstaked(address indexed user, uint256 amount);
+    event RewardClaimed(address indexed user, uint256 amount);
+    event TierDowngraded(address indexed user);
+    event APYUpdated(Tier indexed tier, uint256 rate, uint256 timestamp);
+    event RewardsDeposited(address indexed sender, uint256 amount);
+
+    // User information
+    struct UserInfo {
+        uint256 balance; // Current staked balance
+        uint256 depositTime; // When user first deposited
+        uint256 lastClaimTime; // Last time user claimed or updated interest
+        uint256 interestEarned; // Unclaimed interest earned
+        uint256 totalClaimed; // Total interest claimed
+        uint256 joinId; // Position in the stakers array (for tier calculation)
+        uint256 lastTimeTierChanged;
+        bool hasUnstaked; // Whether user has ever unstaked (for permanent downgrade)
+        bool isActive; // Whether user has any active stake
+        bool isFirstDepositMoreThanMinStake; // Whether user's first deposit was more than min stake
+    }
+
+    // APY Period information with separate start times for each tier
+    struct APYPeriod {
+        uint256 rate; // APY rate for this period
+        uint256 startTime; // When this APY period started
+    }
+    // Tier history for each user
+
+    struct TierEvent {
+        Tier from;
+        Tier to;
+        uint256 timestamp;
+    }
+
+    // Storage
+    mapping(Tier => APYPeriod[]) public tierAPYHistory; // tier => APY periods
+    mapping(address => UserInfo) public users;
+    mapping(uint256 => address) public stakerAddress;
+    mapping(address => TierEvent[]) public stakerTierHistory;
+    uint256 public activeStakerCount;
+    uint256 public totalStaked;
+    uint256 public rewardsReserve; // Tracking rewards available in the contract
+    uint256 public nextJoinId;
+    uint256 public minStakeAmount;
+    bool public compoundingEnabled;
+    FenwickTree.Tree private stakerTree;
+
+    modifier whenCompoundingEnabled() {
+        require(compoundingEnabled, "Compounding is disabled");
+        _;
+    }
+
+    //constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    // Initializer
+    function initialize(address _stakingToken, address _admin) public initializer {
+        require(_stakingToken != address(0), "Invalid token address");
+        stakingToken = IERC20(_stakingToken);
+        __Ownable_init(_admin);
+        __Pausable_init();
+
+        // Set initial APY rates
+        tier1APY = 50 * PRECISION; // 50%
+        tier2APY = 35 * PRECISION; // 35%
+        tier3APY = 20 * PRECISION; // 20%
+
+        //Initialize tree
+        stakerTree.size = MAX_USERS;
+        nextJoinId = 1;
+        minStakeAmount = 3000 * 1e18;
+
+        // Initialize APY history for each tier
+        uint256 currentTime = block.timestamp;
+        tierAPYHistory[Tier.Tier1].push(APYPeriod({rate: tier1APY, startTime: currentTime}));
+        tierAPYHistory[Tier.Tier2].push(APYPeriod({rate: tier2APY, startTime: currentTime}));
+        tierAPYHistory[Tier.Tier3].push(APYPeriod({rate: tier3APY, startTime: currentTime}));
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                         CORE FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @notice Stake tokens
+     * @param amount Amount to stake
+     */
+    function stake(uint256 amount) external nonReentrant whenNotPaused {
+        require(amount > 0, "Cannot stake zero amount");
+
+        UserInfo storage user = users[msg.sender];
+
+        // Check if user has unstaked before - permanent tier 3 downgrade
+        require(!user.hasUnstaked, "Cannot stake after unstaking");
+
+        // Update interest before changing balance
+        _updateInterest(msg.sender);
+
+        // Transfer tokens from user to contract
+        require(stakingToken.transferFrom(msg.sender, address(this), amount), "Token transfer failed");
+
+        // If first time staking, register staker position
+        if (!user.isActive) {
+            user.joinId = nextJoinId++;
+            stakerTree.update(user.joinId, 1);
+            stakerAddress[user.joinId] = msg.sender;
+            user.isActive = true;
+            activeStakerCount++;
+        }
+
+        // Update user balances
+        user.balance += amount;
+        user.depositTime = block.timestamp;
+        user.lastClaimTime = block.timestamp;
+
+        // Update total staked
+        totalStaked += amount;
+
+        // Determine user's tier for event
+        uint256 rank = stakerTree.query(user.joinId);
+        Tier tier = Tier.Tier3;
+
+        if (user.balance >= minStakeAmount) {
+            tier = _computeTierByRank(rank, activeStakerCount);
+            user.isFirstDepositMoreThanMinStake = true;
+        }
+
+        _recordTierChange(msg.sender, tier);
+
+        // then record any boundary crossings
+        _checkBoundariesAndRecord(false);
+
+        emit Staked(msg.sender, amount, tier);
+    }
+
+    /**
+     * @notice Unstake tokens
+     * @param amount Amount to unstake
+     */
+    function unstake(uint256 amount) external nonReentrant whenNotPaused {
+        UserInfo storage user = users[msg.sender];
+
+        require(user.isActive, "No active stake");
+        require(user.balance >= amount, "Insufficient balance");
+        require(block.timestamp >= user.depositTime + UNSTAKE_WINDOW, "Unstaking window not reached");
+
+        // Update interest before changing balance
+        _updateInterest(msg.sender);
+
+        // Update user balances
+        user.balance -= amount;
+        user.lastClaimTime = block.timestamp;
+
+        // Update total staked
+        totalStaked -= amount;
+
+        // Update tree to remove user
+        stakerTree.update(user.joinId, -1);
+
+        // If fully unstaked, mark as inactive
+        if (user.balance == 0) {
+            user.isActive = false;
+            user.hasUnstaked = true;
+            activeStakerCount--;
+            _recordTierChange(msg.sender, Tier.Tier3);
+        }
+
+        if (user.balance < minStakeAmount) {
+            user.hasUnstaked = true;
+            _recordTierChange(msg.sender, Tier.Tier3);
+        }
+
+        _checkBoundariesAndRecord(true);
+
+        // Transfer tokens from contract to user
+        require(stakingToken.transfer(msg.sender, amount), "Token transfer failed");
+
+        emit TierDowngraded(msg.sender);
+        emit Unstaked(msg.sender, amount);
+    }
+
+    /**
+     * @notice Claim accrued interest
+     */
+    function claimInterest() external nonReentrant whenNotPaused {
+        _updateInterest(msg.sender);
+
+        UserInfo storage user = users[msg.sender];
+        uint256 claimable = user.interestEarned;
+
+        require(claimable > 0, "Nothing to claim");
+
+        // Check if we have enough rewards in the contract
+        require(rewardsReserve >= claimable, "Insufficient rewards in contract");
+
+        user.lastClaimTime = block.timestamp;
+        user.interestEarned = 0;
+        user.totalClaimed += claimable;
+
+        // Update rewards reserve
+        rewardsReserve -= claimable;
+
+        // Transfer tokens to user
+        require(stakingToken.transfer(msg.sender, claimable), "Token transfer failed");
+
+        emit RewardClaimed(msg.sender, claimable);
+    }
+
+    /**
+     * @notice Compound interest by adding it to staked balance
+     */
+    function compoundInterest() external whenCompoundingEnabled nonReentrant whenNotPaused {
+        _updateInterest(msg.sender);
+
+        UserInfo storage user = users[msg.sender];
+        uint256 claimable = user.interestEarned;
+
+        require(claimable > 0, "Nothing to compound");
+        require(!user.hasUnstaked, "Cannot compound after unstaking");
+
+        // Check if we have enough rewards in the contract
+        require(rewardsReserve >= claimable, "Insufficient rewards in contract");
+
+        // Update rewards reserve
+        rewardsReserve -= claimable;
+
+        // Add earned interest to staked balance
+        user.balance += claimable;
+        totalStaked += claimable;
+
+        // Reset interest tracking
+        user.lastClaimTime = block.timestamp;
+        user.interestEarned = 0;
+        user.totalClaimed += claimable;
+
+        // Determine user's tier for event (might have changed due to increased balance)
+        Tier tier = getCurrentTier(msg.sender);
+
+        emit RewardClaimed(msg.sender, claimable);
+        emit Staked(msg.sender, claimable, tier);
+    }
+
+    /**
+     * @notice Update APY rate for a specific tier
+     * @param tier The tier to update (1, 2, or 3)
+     * @param rate The new APY rate (e.g., 50 * PRECISION for 50%)
+     */
+    function updateTierAPY(Tier tier, uint256 rate) external onlyOwner {
+        require(tier >= Tier.Tier1 && tier <= Tier.Tier3, "Invalid tier");
+
+        // Update the current rate for the tier
+        if (tier == Tier.Tier1) {
+            tier1APY = rate;
+        } else if (tier == Tier.Tier2) {
+            tier2APY = rate;
+        } else {
+            tier3APY = rate;
+        }
+
+        // Add to history for this specific tier
+        tierAPYHistory[tier].push(APYPeriod({rate: rate, startTime: block.timestamp}));
+
+        emit APYUpdated(tier, rate, block.timestamp);
+    }
+
+    /**
+     * @notice Update all tier APY rates at once
+     * @param _tier1APY APY for tier 1
+     * @param _tier2APY APY for tier 2
+     * @param _tier3APY APY for tier 3
+     */
+    function updateAllAPYs(uint256 _tier1APY, uint256 _tier2APY, uint256 _tier3APY) external onlyOwner {
+        // Update all rates
+        tier1APY = _tier1APY;
+        tier2APY = _tier2APY;
+        tier3APY = _tier3APY;
+
+        uint256 currentTime = block.timestamp;
+
+        // Add to history for each tier
+        tierAPYHistory[Tier.Tier1].push(APYPeriod({rate: _tier1APY, startTime: currentTime}));
+        tierAPYHistory[Tier.Tier2].push(APYPeriod({rate: _tier2APY, startTime: currentTime}));
+        tierAPYHistory[Tier.Tier3].push(APYPeriod({rate: _tier3APY, startTime: currentTime}));
+
+        emit APYUpdated(Tier.Tier1, _tier1APY, currentTime);
+        emit APYUpdated(Tier.Tier2, _tier2APY, currentTime);
+        emit APYUpdated(Tier.Tier3, _tier3APY, currentTime);
+    }
+
+    /**
+     * @notice Deposit tokens to be used as rewards
+     * @param amount Amount to deposit
+     */
+    function depositRewards(uint256 amount) external whenNotPaused {
+        require(amount > 0, "Cannot deposit zero amount");
+
+        // Transfer tokens from sender to contract
+        require(stakingToken.transferFrom(msg.sender, address(this), amount), "Token transfer failed");
+
+        // Update rewards reserve
+        rewardsReserve += amount;
+
+        emit RewardsDeposited(msg.sender, amount);
+    }
+
+    /**
+     * @notice Emergency withdraw rewards in case of shutdown (only admin)
+     * @param amount Amount to withdraw
+     */
+    function withdrawRewards(uint256 amount) external onlyOwner {
+        require(amount > 0, "Cannot withdraw zero amount");
+        require(amount <= rewardsReserve, "Insufficient rewards");
+
+        rewardsReserve -= amount;
+
+        // Transfer tokens to admin
+        require(stakingToken.transfer(owner(), amount), "Token transfer failed");
+    }
+
+    /// @notice - Only owner can pause the contract ops
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    /// @notice - Only owner can unpause the contract ops
+    function unPause() external onlyOwner {
+        _unpause();
+    }
+
+    /**
+     * @notice Set the minimum stake amount
+     * @param amount The new minimum stake amount
+     */
+    function setMinStakeAmount(uint256 amount) external onlyOwner {
+        minStakeAmount = amount;
+    }
+
+    /**
+     * @notice Set the compounding status
+     * @param status The new compounding status
+     */
+    function setCompoundingStatus(bool status) external onlyOwner {
+        compoundingEnabled = status;
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                         VIEW FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @notice Get the user's current tier
+     * @param userAddr User address
+     * @return The user's tier (1, 2, or 3)
+     */
+    function getCurrentTier(address userAddr) public view returns (Tier) {
+        UserInfo memory user = users[userAddr];
+
+        // If user has unstaked, permanently tier 3
+        if (user.hasUnstaked) {
+            return Tier.Tier3;
+        }
+
+        // If not active or below minimum stake, tier 3
+        if (!user.isActive || (!user.isFirstDepositMoreThanMinStake && user.balance < minStakeAmount)) {
+            return Tier.Tier3;
+        }
+
+        // Get user's rank from the tree
+        uint256 rank = stakerTree.query(user.joinId);
+
+        // Compute tier based on rank
+        return _computeTierByRank(rank, activeStakerCount);
+    }
+
+    /**
+     * @notice Get the APY rate for a user
+     * @param userAddr User address
+     * @return APY rate for the user
+     */
+    function getUserAPY(address userAddr) public view returns (uint256) {
+        Tier tier = getCurrentTier(userAddr);
+
+        if (tier == Tier.Tier1) {
+            return tier1APY;
+        } else if (tier == Tier.Tier2) {
+            return tier2APY;
+        } else {
+            return tier3APY;
+        }
+    }
+
+    /**
+     * @notice Calculate unclaimed interest for a user
+     * @param userAddr User address
+     * @return totalInterest Total unclaimed interest
+     */
+    function calculateUnclaimedInterest(address userAddr) public view returns (uint256 totalInterest) {
+        UserInfo memory user = users[userAddr];
+
+        // Return stored interest if no balance
+        if (user.balance == 0) return user.interestEarned;
+
+        // Start with stored interest
+        totalInterest = user.interestEarned;
+
+        // Get the user's tier history
+        TierEvent[] storage userTierHistory = stakerTierHistory[userAddr];
+
+        if (userTierHistory.length == 0) return totalInterest;
+
+        uint256 fromTime = user.lastClaimTime;
+        uint256 toTime = block.timestamp;
+
+        // Find the tier the user was in at fromTime
+        Tier currentTier = Tier.Tier3; // Default tier if no history
+        uint256 relevantStartIndex = 0;
+
+        // Find the most recent tier event before fromTime
+        for (uint256 i = 0; i < userTierHistory.length; i++) {
+            if (userTierHistory[i].timestamp <= fromTime) {
+                currentTier = userTierHistory[i].to;
+                relevantStartIndex = i;
+            } else {
+                break;
+            }
+        }
+
+        // Process tier periods starting from the relevant tier
+        uint256 periodStart = fromTime;
+        uint256 periodEnd;
+
+        // First handle the tier the user was in at fromTime
+        if (
+            relevantStartIndex + 1 < userTierHistory.length
+                && userTierHistory[relevantStartIndex + 1].timestamp < toTime
+        ) {
+            periodEnd = userTierHistory[relevantStartIndex + 1].timestamp;
+        } else {
+            periodEnd = toTime;
+        }
+
+        // Calculate interest for this initial period
+        if (periodEnd > periodStart) {
+            uint256 apy = getTierAPYForPeriod(currentTier, periodStart, periodEnd);
+            uint256 periodInterest =
+                ((user.balance * apy * (periodEnd - periodStart)) / (SECONDS_IN_YEAR * PRECISION)) / 100;
+            totalInterest += periodInterest;
+        }
+
+        // Then process any subsequent tier changes within our calculation window
+        for (uint256 i = relevantStartIndex + 1; i < userTierHistory.length; i++) {
+            if (userTierHistory[i].timestamp >= toTime) break;
+
+            periodStart = userTierHistory[i].timestamp;
+            periodEnd = (i == userTierHistory.length - 1) ? toTime : userTierHistory[i + 1].timestamp;
+            if (periodEnd > toTime) periodEnd = toTime;
+
+            if (periodEnd <= periodStart) continue;
+
+            Tier periodTier = userTierHistory[i].to;
+            uint256 apy = getTierAPYForPeriod(periodTier, periodStart, periodEnd);
+
+            uint256 periodInterest =
+                ((user.balance * apy * (periodEnd - periodStart)) / (SECONDS_IN_YEAR * PRECISION)) / 100;
+            totalInterest += periodInterest;
+        }
+        return totalInterest;
+    }
+
+    /**
+     * @notice Get tier counts
+     * @return tier1Count Number of tier 1 stakers
+     * @return tier2Count Number of tier 2 stakers
+     * @return tier3Count Number of tier 3 stakers
+     */
+    function getTierCounts() public view returns (uint256 tier1Count, uint256 tier2Count, uint256 tier3Count) {
+        return getTierCountForStakerCount(activeStakerCount);
+    }
+
+    function getTierCountForStakerCount(uint256 stakerCount)
+        public
+        pure
+        returns (uint256 tier1Count, uint256 tier2Count, uint256 tier3Count)
+    {
+        // Calculate tier 1 count (20% of active stakers)
+        tier1Count = (stakerCount * TIER1_PERCENTAGE) / 100;
+
+        // Ensure at least 1 staker in tier 1 if there are any active stakers
+        if (tier1Count == 0 && stakerCount > 0) {
+            tier1Count = 1;
+        }
+
+        // Calculate remaining stakers after tier 1
+        uint256 remainingAfterTier1 = stakerCount > tier1Count ? stakerCount - tier1Count : 0;
+
+        // Calculate tier 2 count (30% of total active stakers, but don't exceed remaining)
+        uint256 calculatedTier2Count = (stakerCount * TIER2_PERCENTAGE) / 100;
+
+        if (calculatedTier2Count == 0 && remainingAfterTier1 > 0) {
+            tier2Count = 1;
+        } else {
+            tier2Count = calculatedTier2Count > remainingAfterTier1 ? remainingAfterTier1 : calculatedTier2Count;
+        }
+
+        // Tier 3 is everyone else
+        tier3Count = stakerCount > (tier1Count + tier2Count) ? stakerCount - tier1Count - tier2Count : 0;
+
+        return (tier1Count, tier2Count, tier3Count);
+    }
+
+    /**
+     * @notice Get user staking information
+     * @param userAddr User address
+     * @return balance Current staked balance
+     * @return tier Current tier
+     * @return apy Current APY rate
+     * @return depositTime Initial deposit time
+     * @return pendingRewards Unclaimed rewards
+     */
+    function getUserInfo(address userAddr)
+        external
+        view
+        returns (uint256 balance, Tier tier, uint256 apy, uint256 depositTime, uint256 pendingRewards)
+    {
+        UserInfo memory user = users[userAddr];
+
+        return (
+            user.balance,
+            getCurrentTier(userAddr),
+            getUserAPY(userAddr),
+            user.depositTime,
+            calculateUnclaimedInterest(userAddr)
+        );
+    }
+
+    /**
+     * @notice Get the amount of reward tokens available in the contract
+     * @return Available rewards
+     */
+    function getAvailableRewards() external view returns (uint256) {
+        return rewardsReserve;
+    }
+
+    /**
+     * @notice Get the APY rate for a specific tier during a time period
+     * @param tier The tier to get the APY for
+     * @param startTime Start time of the period
+     * @param endTime End time of the period
+     * @return Weighted average APY rate for the tier during this period
+     */
+    function getTierAPYForPeriod(Tier tier, uint256 startTime, uint256 endTime) public view returns (uint256) {
+        require(startTime < endTime, "Invalid time period");
+        require(tier >= Tier.Tier1 && tier <= Tier.Tier3, "Invalid tier");
+
+        // Get APY history for this tier
+        APYPeriod[] storage apyPeriods = tierAPYHistory[tier];
+
+        // If no history, return current rate
+        if (apyPeriods.length == 0) {
+            if (tier == Tier.Tier1) return tier1APY;
+            else if (tier == Tier.Tier2) return tier2APY;
+            else return tier3APY;
+        }
+
+        // Handle case when startTime is before first recorded APY
+        if (startTime < apyPeriods[0].startTime) {
+            startTime = apyPeriods[0].startTime;
+            if (startTime >= endTime) return apyPeriods[0].rate;
+        }
+
+        // Find all applicable APY periods
+        uint256 totalDuration = 0;
+        uint256 weightedSum = 0;
+
+        for (uint256 i = 0; i < apyPeriods.length; i++) {
+            // Get current period
+            APYPeriod memory period = apyPeriods[i];
+
+            // Skip periods completely before our period of interest
+            if (i < apyPeriods.length - 1 && apyPeriods[i + 1].startTime <= startTime) continue;
+
+            // Period start is max of period.startTime and our startTime
+            uint256 periodStart = (period.startTime > startTime) ? period.startTime : startTime;
+
+            // Period end is min of next period start and our endTime
+            uint256 periodEnd;
+            if (i < apyPeriods.length - 1) {
+                periodEnd = (apyPeriods[i + 1].startTime < endTime) ? apyPeriods[i + 1].startTime : endTime;
+            } else {
+                periodEnd = endTime;
+            }
+
+            // Skip if period has no duration
+            if (periodEnd <= periodStart) continue;
+
+            // Calculate duration of this sub-period
+            uint256 duration = periodEnd - periodStart;
+            totalDuration += duration;
+
+            // Add weighted contribution to sum
+            weightedSum += period.rate * duration;
+
+            // If we've reached the end of our period, we're done
+            if (periodEnd >= endTime) break;
+        }
+
+        // Return weighted average (or 0 if no duration)
+        if (totalDuration == 0) return 0;
+        return weightedSum / totalDuration;
+    }
+
+    function stakerTierHistoryLength(address user) external view returns (uint256) {
+        return stakerTierHistory[user].length;
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        INTERNAL FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @notice Update user's interest
+     * @param userAddr User address
+     */
+    function _updateInterest(address userAddr) internal {
+        users[userAddr].interestEarned = calculateUnclaimedInterest(userAddr);
+    }
+
+    function _recordTierChange(address user, Tier newTier) internal {
+        // Get current tier
+        Tier old = getCurrentTier(user);
+
+        // If this is the same tier as before, no change to record
+        if (
+            stakerTierHistory[user].length > 0
+                && stakerTierHistory[user][stakerTierHistory[user].length - 1].to == newTier
+        ) return;
+
+        uint256 nowTs = block.timestamp;
+
+        //push event - ensure neither from nor to is Tier.None
+        stakerTierHistory[user].push(TierEvent({from: old, to: newTier, timestamp: nowTs}));
+
+        users[user].lastTimeTierChanged = nowTs;
+    }
+
+    function _checkBoundariesAndRecord(bool isRemoval) internal {
+        // recompute thresholds
+        uint256 n = activeStakerCount;
+        uint256 oldN = isRemoval ? n + 1 : n - 1; // for removal we call after decrement; for add we call after increment
+
+        // old thresholds (before this tx's change)
+        (uint256 old_t1, uint256 old_t2,) = getTierCountForStakerCount(oldN);
+        // new thresholds
+        (uint256 new_t1, uint256 new_t2,) = getTierCountForStakerCount(n);
+
+        // for each boundary, if it shifted by ±1, find the user crossing
+        if (new_t1 != old_t1) {
+            // someone moved across Tier1↔Tier2
+            // the user at rank = min(old_t1, new_t1)+1 if promotion, or old_t1 if demotion
+            uint256 crossRank = new_t1 > old_t1
+                ? new_t1 // promotion: the one newly entering Tier1
+                : old_t1; // demotion: the one kicked out of Tier1
+            uint256 joinIdCross = stakerTree.findByCumulativeFrequency(crossRank);
+            address userCross = stakerAddress[joinIdCross];
+            Tier toTier = _computeTierByRank(joinIdCross, n);
+            _recordTierChange(userCross, toTier);
+        }
+
+        if (new_t2 != old_t2) {
+            // Tier2↔Tier3 boundary
+            uint256 crossRank = new_t2 > old_t2 ? new_t2 : old_t2;
+            uint256 joinIdCross = stakerTree.findByCumulativeFrequency(crossRank);
+            address userCross = stakerAddress[joinIdCross];
+            Tier toTier = _computeTierByRank(joinIdCross, n);
+            _recordTierChange(userCross, toTier);
+        }
+    }
+
+    function _computeTierByRank(uint256 rank, uint256 totalStakers) internal pure returns (Tier) {
+        if (rank == 0 || rank > totalStakers) return Tier.None;
+        (uint256 tier1Count, uint256 tier2Count,) = getTierCountForStakerCount(totalStakers);
+        if (rank <= tier1Count) return Tier.Tier1;
+        else if (rank <= tier1Count + tier2Count) return Tier.Tier2;
+        return Tier.Tier3;
+    }
+
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
+}
