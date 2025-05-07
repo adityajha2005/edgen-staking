@@ -29,3 +29,27 @@ contract DeployLayerEdgeStaking is Script {
         vm.stopBroadcast();
     }
 }
+
+contract DeployLayerEdgeStakingNative is Script {
+    function run() public returns (LayerEdgeStaking layerEdgeStaking, HelperConfig helperConfig) {
+        helperConfig = new HelperConfig();
+        NetworkConfig memory networkConfig = helperConfig.getActiveNetworkConfigNative();
+
+        vm.startBroadcast();
+        LayerEdgeStaking layerEdgeStakingImpl = new LayerEdgeStaking();
+
+        layerEdgeStaking = LayerEdgeStaking(
+            payable(
+                address(
+                    new ERC1967Proxy(
+                        address(layerEdgeStakingImpl),
+                        abi.encodeWithSelector(
+                            layerEdgeStakingImpl.initialize.selector, networkConfig.stakingToken, networkConfig.owner
+                        )
+                    )
+                )
+            )
+        );
+        vm.stopBroadcast();
+    }
+}
