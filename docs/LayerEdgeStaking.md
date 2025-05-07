@@ -8,7 +8,6 @@ The LayerEdgeStaking contract implements a tiered staking system for EDGEN token
 
 - **Tiered Staking System**: Three tiers with different reward rates
 - **Dynamic Tier Allocation**: Tiers determined by staking position and total active stakers
-- **Upgradeable Contract**: Uses OpenZeppelin's UUPS upgradeable pattern
 - **Reward Mechanisms**: Simple claiming or compounding options
 - **Unstaking Rules**: Unstaking window of 7 days and permanent tier downgrade after unstaking
 
@@ -48,7 +47,6 @@ For each staker, the contract tracks:
 - Interest earned but not claimed
 - Total claimed interest
 - Join ID (position in the staking queue)
-- Unstaking history
 - Tier change history
 
 ### Fenwick Tree Implementation
@@ -201,7 +199,7 @@ When a user joins or leaves, the contract:
 2. Identifies any users crossing tier boundaries
 3. Records tier changes for affected users
 
-Note: When a user joins or leaves the system, at most two people's tier will be changed and the method `_checkBoundariesAndRecord` will find exactly whose boundary is going to change and record them.
+Note: When a user joins or leaves the system, at most two people's tier will be changed and the method `_checkBoundariesAndRecord` will find exactly whose tier is going to change and record them.
 
 ## Administrative Functions
 
@@ -288,7 +286,6 @@ The contract emits the following events:
 The contract uses OpenZeppelin's UUPS (Universal Upgradeable Proxy Standard) pattern:
 - Logic contract can be upgraded while preserving state
 - Upgrades can only be performed by the contract owner
-- The `initialize` function replaces the constructor
 
 ## Conclusion
 
