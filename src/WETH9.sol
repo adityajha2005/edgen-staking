@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 contract WETH9 {
-    string public name = "Wrapped Edgegen";
+    string public name = "Wrapped Edgen";
     string public symbol = "WEDGEN";
     uint8 public decimals = 18;
 
