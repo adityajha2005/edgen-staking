@@ -9,7 +9,6 @@ contract FenwickTreeTest is Test {
     using FenwickTree for FenwickTree.Tree;
 
     FenwickTree.Tree tree;
-
     FenwickTree.Tree tree2;
 
     function setUp() public {
@@ -33,6 +32,8 @@ contract FenwickTreeTest is Test {
             tree.update(uint256(keccak256(abi.encodePacked(i))) % 100_000, -1);
         }
         vm.resetGasMetering();
+
+        tree.query(10_000);
     }
 
     function test_FenwickTree_update() public {

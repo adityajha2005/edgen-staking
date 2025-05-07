@@ -8,6 +8,7 @@ import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Own
 import {FenwickTree} from "@src/library/FenwickTree.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {IWETH} from "@interfaces/IWETH.sol";
 
 /**
  * @title LayerEdgeStaking
@@ -108,6 +109,14 @@ contract LayerEdgeStaking is
         _disableInitializers();
     }
 
+    receive() external payable {
+        require(msg.sender == address(stakingToken), "Only staking token can send ETH");
+    }
+
+    fallback() external payable {
+        revert("Fallback not allowed");
+    }
+
     // Initializer
     function initialize(address _stakingToken, address _admin) public initializer {
         require(_stakingToken != address(0), "Invalid token address");
@@ -141,51 +150,14 @@ contract LayerEdgeStaking is
      * @param amount Amount to stake
      */
     function stake(uint256 amount) external nonReentrant whenNotPaused {
-        require(amount > 0, "Cannot stake zero amount");
+        _stake(amount, msg.sender, false);
+    }
 
-        UserInfo storage user = users[msg.sender];
-
-        // Check if user has unstaked before - permanent tier 3 downgrade
-        require(!user.hasUnstaked, "Cannot stake after unstaking");
-
-        // Update interest before changing balance
-        _updateInterest(msg.sender);
-
-        // Transfer tokens from user to contract
-        require(stakingToken.transferFrom(msg.sender, address(this), amount), "Token transfer failed");
-
-        // If first time staking, register staker position
-        if (!user.isActive) {
-            user.joinId = nextJoinId++;
-            stakerTree.update(user.joinId, 1);
-            stakerAddress[user.joinId] = msg.sender;
-            user.isActive = true;
-            activeStakerCount++;
-        }
-
-        // Update user balances
-        user.balance += amount;
-        user.depositTime = block.timestamp;
-        user.lastClaimTime = block.timestamp;
-
-        // Update total staked
-        totalStaked += amount;
-
-        // Determine user's tier for event
-        uint256 rank = stakerTree.query(user.joinId);
-        Tier tier = Tier.Tier3;
-
-        if (user.balance >= minStakeAmount) {
-            tier = _computeTierByRank(rank, activeStakerCount);
-            user.isFirstDepositMoreThanMinStake = true;
-        }
-
-        _recordTierChange(msg.sender, tier);
-
-        // then record any boundary crossings
-        _checkBoundariesAndRecord(false);
-
-        emit Staked(msg.sender, amount, tier);
+    /**
+     * @notice Stake native tokens. Internally converts to a wrapped token
+     */
+    function stakeNative() external payable nonReentrant whenNotPaused {
+        _stake(msg.value, msg.sender, true);
     }
 
     /**
@@ -193,72 +165,29 @@ contract LayerEdgeStaking is
      * @param amount Amount to unstake
      */
     function unstake(uint256 amount) external nonReentrant whenNotPaused {
-        UserInfo storage user = users[msg.sender];
+        _unstake(amount, msg.sender, false);
+    }
 
-        require(user.isActive, "No active stake");
-        require(user.balance >= amount, "Insufficient balance");
-        require(block.timestamp >= user.depositTime + UNSTAKE_WINDOW, "Unstaking window not reached");
-
-        // Update interest before changing balance
-        _updateInterest(msg.sender);
-
-        // Update user balances
-        user.balance -= amount;
-        user.lastClaimTime = block.timestamp;
-
-        // Update total staked
-        totalStaked -= amount;
-
-        // Update tree to remove user
-        stakerTree.update(user.joinId, -1);
-
-        // If fully unstaked, mark as inactive
-        if (user.balance == 0) {
-            user.isActive = false;
-            user.hasUnstaked = true;
-            activeStakerCount--;
-            _recordTierChange(msg.sender, Tier.Tier3);
-        }
-
-        if (user.balance < minStakeAmount) {
-            user.hasUnstaked = true;
-            _recordTierChange(msg.sender, Tier.Tier3);
-        }
-
-        _checkBoundariesAndRecord(true);
-
-        // Transfer tokens from contract to user
-        require(stakingToken.transfer(msg.sender, amount), "Token transfer failed");
-
-        emit TierDowngraded(msg.sender);
-        emit Unstaked(msg.sender, amount);
+    /**
+     * @notice Unstake native tokens
+     * @param amount Amount to unstake
+     */
+    function unstakeNative(uint256 amount) external nonReentrant whenNotPaused {
+        _unstake(amount, msg.sender, true);
     }
 
     /**
      * @notice Claim accrued interest
      */
     function claimInterest() external nonReentrant whenNotPaused {
-        _updateInterest(msg.sender);
+        _claimInterest(msg.sender, false);
+    }
 
-        UserInfo storage user = users[msg.sender];
-        uint256 claimable = user.interestEarned;
-
-        require(claimable > 0, "Nothing to claim");
-
-        // Check if we have enough rewards in the contract
-        require(rewardsReserve >= claimable, "Insufficient rewards in contract");
-
-        user.lastClaimTime = block.timestamp;
-        user.interestEarned = 0;
-        user.totalClaimed += claimable;
-
-        // Update rewards reserve
-        rewardsReserve -= claimable;
-
-        // Transfer tokens to user
-        require(stakingToken.transfer(msg.sender, claimable), "Token transfer failed");
-
-        emit RewardClaimed(msg.sender, claimable);
+    /**
+     * @notice Claim accrued interest for native tokens
+     */
+    function claimInterestNative() external nonReentrant whenNotPaused {
+        _claimInterest(msg.sender, true);
     }
 
     /**
@@ -671,6 +600,136 @@ contract LayerEdgeStaking is
     /*//////////////////////////////////////////////////////////////
                         INTERNAL FUNCTIONS
     //////////////////////////////////////////////////////////////*/
+
+    function _stake(uint256 amount, address userAddr, bool isNative) internal {
+        require(amount > 0, "Cannot stake zero amount");
+
+        UserInfo storage user = users[userAddr];
+
+        // Check if user has unstaked before - permanent tier 3 downgrade
+        require(!user.hasUnstaked, "Cannot stake after unstaking");
+
+        // Update interest before changing balance
+        _updateInterest(userAddr);
+
+        // Transfer tokens from user to contract
+        if (!isNative) {
+            require(stakingToken.transferFrom(userAddr, address(this), amount), "Token transfer failed");
+        } else {
+            IWETH(address(stakingToken)).deposit{value: amount}();
+        }
+
+        // If first time staking, register staker position
+        if (!user.isActive) {
+            user.joinId = nextJoinId++;
+            stakerTree.update(user.joinId, 1);
+            stakerAddress[user.joinId] = userAddr;
+            user.isActive = true;
+            activeStakerCount++;
+        }
+
+        // Update user balances
+        user.balance += amount;
+        user.depositTime = block.timestamp;
+        user.lastClaimTime = block.timestamp;
+
+        // Update total staked
+        totalStaked += amount;
+
+        // Determine user's tier for event
+        uint256 rank = stakerTree.query(user.joinId);
+        Tier tier = Tier.Tier3;
+
+        if (user.balance >= minStakeAmount) {
+            tier = _computeTierByRank(rank, activeStakerCount);
+            user.isFirstDepositMoreThanMinStake = true;
+        }
+
+        _recordTierChange(userAddr, tier);
+
+        // then record any boundary crossings
+        _checkBoundariesAndRecord(false);
+
+        emit Staked(userAddr, amount, tier);
+    }
+
+    function _unstake(uint256 amount, address userAddr, bool isNative) internal {
+        UserInfo storage user = users[userAddr];
+
+        require(user.isActive, "No active stake");
+        require(user.balance >= amount, "Insufficient balance");
+        require(block.timestamp >= user.depositTime + UNSTAKE_WINDOW, "Unstaking window not reached");
+
+        // Update interest before changing balance
+        _updateInterest(userAddr);
+
+        // Update user balances
+        user.balance -= amount;
+        user.lastClaimTime = block.timestamp;
+
+        // Update total staked
+        totalStaked -= amount;
+
+        // Update tree to remove user
+        stakerTree.update(user.joinId, -1);
+
+        // If fully unstaked, mark as inactive
+        if (user.balance == 0) {
+            user.isActive = false;
+            user.hasUnstaked = true;
+            activeStakerCount--;
+            _recordTierChange(userAddr, Tier.Tier3);
+        }
+
+        if (user.balance < minStakeAmount) {
+            user.hasUnstaked = true;
+            _recordTierChange(userAddr, Tier.Tier3);
+        }
+
+        _checkBoundariesAndRecord(true);
+
+        // Transfer tokens from contract to user
+        if (!isNative) {
+            require(stakingToken.transfer(userAddr, amount), "Token transfer failed");
+        } else {
+            IWETH(address(stakingToken)).withdraw(amount);
+            (bool success,) = payable(userAddr).call{value: amount}("");
+            require(success, "Unstake native transfer failed");
+        }
+
+        emit TierDowngraded(userAddr);
+        emit Unstaked(userAddr, amount);
+    }
+
+    function _claimInterest(address userAddr, bool isNative) internal {
+        _updateInterest(userAddr);
+
+        UserInfo storage user = users[userAddr];
+        uint256 claimable = user.interestEarned;
+
+        require(claimable > 0, "Nothing to claim");
+
+        // Check if we have enough rewards in the contract
+        require(rewardsReserve >= claimable, "Insufficient rewards in contract");
+
+        user.lastClaimTime = block.timestamp;
+        user.interestEarned = 0;
+        user.totalClaimed += claimable;
+
+        // Update rewards reserve
+        rewardsReserve -= claimable;
+
+        // Transfer tokens to user
+        if (!isNative) {
+            require(stakingToken.transfer(userAddr, claimable), "Token transfer failed");
+        } else {
+            IWETH(address(stakingToken)).withdraw(claimable);
+            (bool success,) = payable(userAddr).call{value: claimable}("");
+            require(success, "Claim interest native transfer failed");
+        }
+
+        emit RewardClaimed(userAddr, claimable);
+    }
 
     /**
      * @notice Update user's interest

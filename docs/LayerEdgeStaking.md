@@ -8,7 +8,6 @@ The LayerEdgeStaking contract implements a tiered staking system for EDGEN token
 
 - **Tiered Staking System**: Three tiers with different reward rates
 - **Dynamic Tier Allocation**: Tiers determined by staking position and total active stakers
-- **Upgradeable Contract**: Uses OpenZeppelin's UUPS upgradeable pattern
 - **Reward Mechanisms**: Simple claiming or compounding options
 - **Unstaking Rules**: Unstaking window of 7 days and permanent tier downgrade after unstaking
 
@@ -48,7 +47,6 @@ For each staker, the contract tracks:
 - Interest earned but not claimed
 - Total claimed interest
 - Join ID (position in the staking queue)
-- Unstaking history
 - Tier change history
 
 ### Fenwick Tree Implementation
@@ -201,7 +199,7 @@ When a user joins or leaves, the contract:
 2. Identifies any users crossing tier boundaries
 3. Records tier changes for affected users
 
-Note: When a user joins or leaves the system, at most two people's tier will be changed and the method `_checkBoundariesAndRecord` will find exactly whose boundary is going to change and record them.
+Note: When a user joins or leaves the system, at most two people's tier will be changed and the method `_checkBoundariesAndRecord` will find exactly whose tier is going to change and record them.
 
 ## Administrative Functions
 
@@ -288,15 +286,69 @@ The contract emits the following events:
 The contract uses OpenZeppelin's UUPS (Universal Upgradeable Proxy Standard) pattern:
 - Logic contract can be upgraded while preserving state
 - Upgrades can only be performed by the contract owner
-- The `initialize` function replaces the constructor
 
-## Conclusion
+## Security Audit Considerations
 
-The LayerEdgeStaking contract provides a sophisticated tiered staking system that rewards early adopters and long-term stakers with higher APY rates. The use of a Fenwick Tree data structure enables efficient tracking of user positions and tier boundaries, making the system scalable to a large number of stakers.
+### Critical Areas for Review
 
-Key functionalities of the contract include:
-- First-come-first-serve incentive structure that rewards early adopters
-- Dynamic tier reallocation that adapts to changing user participation
-- Efficient implementation that can handle large numbers of stakers
-- Comprehensive rewards tracking and tier history for accurate interest calculations
-- Upgradeable architecture for future enhancements
+1. **Native Token Handling**
+   - ETH/WETH conversion mechanisms
+   - Receive and fallback function security
+   - Native token balance tracking
+   - Potential reentrancy in native token operations
+
+2. **Tier System Security**
+   - Fenwick Tree implementation correctness
+   - Tier boundary calculation precision
+   - Potential manipulation of tier positions
+   - Race conditions in tier updates
+
+3. **Reward Calculation**
+   - Interest calculation precision
+   - Potential overflow/underflow in calculations
+   - APY history tracking accuracy
+   - Compounding mechanism security
+
+4. **Access Control**
+   - Owner privileges and restrictions
+   - Upgrade mechanism security (UUPS)
+   - Emergency pause functionality
+   - Admin function access controls
+
+### Known Limitations
+
+1. **Tier System**
+   - Maximum of 100,000,000 users (MAX_USERS constant)
+   - Tier percentages are fixed (20%, 30%, 50%)
+   - Permanent tier downgrade after unstaking
+
+2. **Staking Rules**
+   - Minimum stake amount requirement
+   - 7-day unstaking window
+   - No partial unstaking restrictions
+   - No maximum stake amount
+
+3. **Reward System**
+   - Rewards must be pre-deposited
+   - No automatic reward distribution
+   - Compounding can be disabled by admin
+
+### Potential Attack Vectors
+
+1. **Tier Manipulation**
+   - Front-running tier changes
+   - Batch staking/unstaking to manipulate tier boundaries
+   - Potential for tier position gaming
+
+2. **Reward Exploitation**
+   - Flash loan attacks on reward calculations
+   - Compounding timing attacks
+   - Reward reserve manipulation
+
+3. **Native Token Vulnerabilities**
+   - ETH/WETH conversion attacks
+   - Direct ETH transfer vulnerabilities
+   - Potential balance tracking issues
+
+Note: This staking contract will be deploy on Ethereum(or other evems) or LayerEdge's L1 (EVM compatible). On Ethereum, the staking token will be a simple ERC20 contract(Openzeppelin's implementation), here only the methods stake, unstake and claimInterest will be used. 
+On LayerEdge's L1, the staking token will be a WETH9 implementation, a wrapper of native token. Here the methods stakeNative, unstakeNative and claimInterestNative will be used.

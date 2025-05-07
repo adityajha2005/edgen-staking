@@ -8,3 +8,4 @@ openzeppelin-contracts/=lib/openzeppelin-contracts/
 @test=test/
 openzeppelin/contracts-upgradeable=lib/openzepplin-contracts-upgradeable/
 @solady=lib/solady/src
+@interfaces=src/interfaces
