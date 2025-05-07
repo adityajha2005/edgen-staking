@@ -7,6 +7,7 @@ import {DeployLayerEdgeStakingNative} from "@script/DeployLayerEdgeStaking.s.sol
 import {NetworkConfig, HelperConfig} from "@script/HelperConfig.s.sol";
 import {WETH9} from "@src/WETH9.sol";
 import {IWETH} from "@src/interfaces/IWETH.sol";
+
 contract NativeTokenStakingTest is Test {
     LayerEdgeStaking public layerEdgeStaking;
     WETH9 public weth;

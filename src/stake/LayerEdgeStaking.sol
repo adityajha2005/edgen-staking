@@ -109,7 +109,6 @@ contract LayerEdgeStaking is
         _disableInitializers();
     }
 
-
     receive() external payable {
         require(msg.sender == address(stakingToken), "Only staking token can send ETH");
     }
@@ -694,7 +693,7 @@ contract LayerEdgeStaking is
             require(stakingToken.transfer(userAddr, amount), "Token transfer failed");
         } else {
             IWETH(address(stakingToken)).withdraw(amount);
-            (bool success, ) = payable(userAddr).call{value: amount}("");
+            (bool success,) = payable(userAddr).call{value: amount}("");
             require(success, "Unstake native transfer failed");
         }
 
@@ -725,7 +724,7 @@ contract LayerEdgeStaking is
             require(stakingToken.transfer(userAddr, claimable), "Token transfer failed");
         } else {
             IWETH(address(stakingToken)).withdraw(claimable);
-            (bool success, ) = payable(userAddr).call{value: claimable}("");
+            (bool success,) = payable(userAddr).call{value: claimable}("");
             require(success, "Claim interest native transfer failed");
         }
 
