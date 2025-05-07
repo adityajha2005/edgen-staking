@@ -157,8 +157,6 @@ contract LayerEdgeStaking is
      * @notice Stake native tokens. Internally converts to a wrapped token
      */
     function stakeNative() external payable nonReentrant whenNotPaused {
-        require(msg.value > 0, "Cannot stake zero amount");
-        IWETH(address(stakingToken)).deposit{value: msg.value}();
         _stake(msg.value, msg.sender, true);
     }
 
@@ -617,6 +615,8 @@ contract LayerEdgeStaking is
         // Transfer tokens from user to contract
         if (!isNative) {
             require(stakingToken.transferFrom(userAddr, address(this), amount), "Token transfer failed");
+        } else {
+            IWETH(address(stakingToken)).deposit{value: amount}();
         }
 
         // If first time staking, register staker position

@@ -65,4 +65,31 @@ contract NativeTokenStakingTest is Test {
         assertEq(user.balance, claimable);
         vm.stopPrank();
     }
+
+    function test_receiveFunction() public {
+        vm.deal(user, 1 ether);
+        vm.startPrank(user);
+
+        // Try to send ETH directly to contract
+        vm.expectRevert("Only staking token can send ETH");
+        (bool success,) = address(layerEdgeStaking).call{value: 1 ether}("");
+        // success is true because the EVM successfully executed the call
+        // even though the contract reverted it
+        assertEq(success, true);
+        vm.stopPrank();
+    }
+
+    function test_fallbackFunction() public {
+        vm.deal(user, 1 ether);
+        vm.startPrank(user);
+
+        // Try to call fallback function
+        vm.expectRevert("Fallback not allowed");
+        (bool success,) = address(layerEdgeStaking).call{value: 1 ether}("0x");
+        // success is true because the EVM successfully executed the call
+        // even though the contract reverted it
+        assertEq(success, true);
+
+        vm.stopPrank();
+    }
 }
