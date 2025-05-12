@@ -642,14 +642,14 @@ contract LayerEdgeStaking is
         uint256 rank = stakerTree.query(user.joinId);
         Tier tier = Tier.Tier3;
 
-        if(user.balance >= minStakeAmount) {
+        if (user.balance >= minStakeAmount) {
             tier = _computeTierByRank(rank, activeStakerCount);
             user.isFirstDepositMoreThanMinStake = true;
 
             _recordTierChange(userAddr, tier);
 
             // Record any boundary crossings only if active staker count has changed
-            if(totalStakersSnapshot[userAddr] != activeStakerCount) {
+            if (totalStakersSnapshot[userAddr] != activeStakerCount) {
                 _checkBoundariesAndRecord(false);
             }
 
@@ -680,8 +680,8 @@ contract LayerEdgeStaking is
         // Update total staked
         totalStaked -= amount;
 
-        if(user.isActive && user.balance < minStakeAmount) {
-            // execute this before removing from tree, this will make sure to calculate interest 
+        if (user.isActive && user.balance < minStakeAmount) {
+            // execute this before removing from tree, this will make sure to calculate interest
             //for amount left after unstake
             _recordTierChange(userAddr, Tier.Tier3);
             stakerTree.update(user.joinId, -1);
@@ -691,7 +691,7 @@ contract LayerEdgeStaking is
         }
 
         // Record any boundary crossings only if active staker count has changed
-        if(totalStakersSnapshot[userAddr] != activeStakerCount) {
+        if (totalStakersSnapshot[userAddr] != activeStakerCount) {
             _checkBoundariesAndRecord(true);
         }
 
@@ -712,7 +712,7 @@ contract LayerEdgeStaking is
 
     function _handleStakeAmountLessThanThreshold(address userAddr) internal {
         UserInfo storage user = users[userAddr];
-        // execute this before removing from tree, this will make sure to calculate interest 
+        // execute this before removing from tree, this will make sure to calculate interest
         //for amount left after unstake
         _recordTierChange(userAddr, Tier.Tier3);
         stakerTree.update(user.joinId, -1);
@@ -763,7 +763,7 @@ contract LayerEdgeStaking is
         // Get current tier
         Tier old = getCurrentTier(user);
 
-        if(old == Tier.Tier3 && users[user].hasUnstaked) {
+        if (old == Tier.Tier3 && users[user].hasUnstaked) {
             return;
         }
 
@@ -792,7 +792,7 @@ contract LayerEdgeStaking is
         (uint256 new_t1, uint256 new_t2,) = getTierCountForStakerCount(n);
 
         // for each boundary, if it shifted by ±1, find the user crossing
-        if (new_t1 != 0 &&new_t1 != old_t1) {
+        if (new_t1 != 0 && new_t1 != old_t1) {
             // someone moved across Tier1↔Tier2
             // the user at rank = min(old_t1, new_t1)+1 if promotion, or old_t1 if demotion
             uint256 crossRank = new_t1 > old_t1
