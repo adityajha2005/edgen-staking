@@ -91,6 +91,7 @@ contract LayerEdgeStaking is
     mapping(address => UserInfo) public users;
     mapping(uint256 => address) public stakerAddress;
     mapping(address => TierEvent[]) public stakerTierHistory;
+    mapping(address => uint256) public totalStakersSnapshot;
     uint256 public activeStakerCount;
     uint256 public totalStaked;
     uint256 public rewardsReserve; // Tracking rewards available in the contract
@@ -123,6 +124,7 @@ contract LayerEdgeStaking is
         stakingToken = IERC20(_stakingToken);
         __Ownable_init(_admin);
         __Pausable_init();
+        __ReentrancyGuard_init();
 
         // Set initial APY rates
         tier1APY = 50 * PRECISION; // 50%
@@ -200,7 +202,7 @@ contract LayerEdgeStaking is
         uint256 claimable = user.interestEarned;
 
         require(claimable > 0, "Nothing to compound");
-        require(!user.hasUnstaked, "Cannot compound after unstaking");
+        require(!user.hasUnstaked && user.balance >= minStakeAmount, "Cannot compound after unstaking");
 
         // Check if we have enough rewards in the contract
         require(rewardsReserve >= claimable, "Insufficient rewards in contract");
@@ -275,14 +277,14 @@ contract LayerEdgeStaking is
      * @notice Deposit tokens to be used as rewards
      * @param amount Amount to deposit
      */
-    function depositRewards(uint256 amount) external whenNotPaused {
+    function depositRewards(uint256 amount) external whenNotPaused nonReentrant {
         require(amount > 0, "Cannot deposit zero amount");
-
-        // Transfer tokens from sender to contract
-        require(stakingToken.transferFrom(msg.sender, address(this), amount), "Token transfer failed");
 
         // Update rewards reserve
         rewardsReserve += amount;
+
+        // Transfer tokens from sender to contract
+        require(stakingToken.transferFrom(msg.sender, address(this), amount), "Token transfer failed");
 
         emit RewardsDeposited(msg.sender, amount);
     }
@@ -643,12 +645,20 @@ contract LayerEdgeStaking is
         if (user.balance >= minStakeAmount) {
             tier = _computeTierByRank(rank, activeStakerCount);
             user.isFirstDepositMoreThanMinStake = true;
+
+            _recordTierChange(userAddr, tier);
+
+            // Record any boundary crossings only if active staker count has changed
+            if (totalStakersSnapshot[userAddr] != activeStakerCount) {
+                _checkBoundariesAndRecord(false);
+            }
+
+            totalStakersSnapshot[userAddr] = activeStakerCount;
+        } else {
+            // Consider this operation as unstaking and keep the user in tier 3 permanently
+            // Don't have to checkBoundariesAndRecord because we the active staker counts remain the same
+            _handleStakeAmountLessThanThreshold(userAddr);
         }
-
-        _recordTierChange(userAddr, tier);
-
-        // then record any boundary crossings
-        _checkBoundariesAndRecord(false);
 
         emit Staked(userAddr, amount, tier);
     }
@@ -656,7 +666,7 @@ contract LayerEdgeStaking is
     function _unstake(uint256 amount, address userAddr, bool isNative) internal {
         UserInfo storage user = users[userAddr];
 
-        require(user.isActive, "No active stake");
+        // require(user.isActive, "No active stake");
         require(user.balance >= amount, "Insufficient balance");
         require(block.timestamp >= user.depositTime + UNSTAKE_WINDOW, "Unstaking window not reached");
 
@@ -670,23 +680,22 @@ contract LayerEdgeStaking is
         // Update total staked
         totalStaked -= amount;
 
-        // Update tree to remove user
-        stakerTree.update(user.joinId, -1);
-
-        // If fully unstaked, mark as inactive
-        if (user.balance == 0) {
+        if (user.isActive && user.balance < minStakeAmount) {
+            // execute this before removing from tree, this will make sure to calculate interest
+            //for amount left after unstake
+            _recordTierChange(userAddr, Tier.Tier3);
+            stakerTree.update(user.joinId, -1);
             user.isActive = false;
             user.hasUnstaked = true;
             activeStakerCount--;
-            _recordTierChange(userAddr, Tier.Tier3);
         }
 
-        if (user.balance < minStakeAmount) {
-            user.hasUnstaked = true;
-            _recordTierChange(userAddr, Tier.Tier3);
+        // Record any boundary crossings only if active staker count has changed
+        if (totalStakersSnapshot[userAddr] != activeStakerCount) {
+            _checkBoundariesAndRecord(true);
         }
 
-        _checkBoundariesAndRecord(true);
+        totalStakersSnapshot[userAddr] = activeStakerCount;
 
         // Transfer tokens from contract to user
         if (!isNative) {
@@ -699,6 +708,17 @@ contract LayerEdgeStaking is
 
         emit TierDowngraded(userAddr);
         emit Unstaked(userAddr, amount);
+    }
+
+    function _handleStakeAmountLessThanThreshold(address userAddr) internal {
+        UserInfo storage user = users[userAddr];
+        // execute this before removing from tree, this will make sure to calculate interest
+        //for amount left after unstake
+        _recordTierChange(userAddr, Tier.Tier3);
+        stakerTree.update(user.joinId, -1);
+        user.isActive = false;
+        user.hasUnstaked = true;
+        activeStakerCount--;
     }
 
     function _claimInterest(address userAddr, bool isNative) internal {
@@ -743,6 +763,10 @@ contract LayerEdgeStaking is
         // Get current tier
         Tier old = getCurrentTier(user);
 
+        if (old == Tier.Tier3 && users[user].hasUnstaked) {
+            return;
+        }
+
         // If this is the same tier as before, no change to record
         if (
             stakerTierHistory[user].length > 0
@@ -768,7 +792,7 @@ contract LayerEdgeStaking is
         (uint256 new_t1, uint256 new_t2,) = getTierCountForStakerCount(n);
 
         // for each boundary, if it shifted by ±1, find the user crossing
-        if (new_t1 != old_t1) {
+        if (new_t1 != 0 && new_t1 != old_t1) {
             // someone moved across Tier1↔Tier2
             // the user at rank = min(old_t1, new_t1)+1 if promotion, or old_t1 if demotion
             uint256 crossRank = new_t1 > old_t1
@@ -791,7 +815,7 @@ contract LayerEdgeStaking is
     }
 
     function _computeTierByRank(uint256 rank, uint256 totalStakers) internal pure returns (Tier) {
-        if (rank == 0 || rank > totalStakers) return Tier.None;
+        if (rank == 0 || rank > totalStakers) return Tier.Tier3;
         (uint256 tier1Count, uint256 tier2Count,) = getTierCountForStakerCount(totalStakers);
         if (rank <= tier1Count) return Tier.Tier1;
         else if (rank <= tier1Count + tier2Count) return Tier.Tier2;
