@@ -123,6 +123,7 @@ contract LayerEdgeStaking is
         stakingToken = IERC20(_stakingToken);
         __Ownable_init(_admin);
         __Pausable_init();
+        __ReentrancyGuard_init();
 
         // Set initial APY rates
         tier1APY = 50 * PRECISION; // 50%
