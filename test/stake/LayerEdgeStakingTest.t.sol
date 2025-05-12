@@ -1955,63 +1955,63 @@ contract LayerEdgeStakingTest is Test {
         setupLargerStake(alice, largeStake);
         setupLargerStake(bob, largeStake);
         setupLargerStake(charlie, largeStake);
-        
+
         // Record initial state
         uint256 initialActiveStakerCount = staking.activeStakerCount();
-        
+
         // Advance time past unstaking window
         vm.warp(block.timestamp + 7 days + 1);
-        
+
         // Bob unstakes 1 wei three times
         vm.startPrank(bob);
-        
+
         // First 1 wei unstake
         staking.unstake(1);
-        
+
         // Check Bob's state - should still be active
         (uint256 bobBalanceAfterUnstake1,,,,) = staking.getUserInfo(bob);
         assertEq(bobBalanceAfterUnstake1, largeStake - 1, "Balance should decrease by 1 wei");
         assertTrue(bobBalanceAfterUnstake1 > staking.minStakeAmount(), "Balance should remain above minimum stake");
         assertEq(staking.activeStakerCount(), initialActiveStakerCount, "Active staker count should not change");
-        
+
         // Second 1 wei unstake
         staking.unstake(1);
-        
+
         // Check Bob's state - should still be active
         (uint256 bobBalanceAfterUnstake2,,,,) = staking.getUserInfo(bob);
         assertEq(bobBalanceAfterUnstake2, largeStake - 2, "Balance should decrease by another 1 wei");
         assertTrue(bobBalanceAfterUnstake2 > staking.minStakeAmount(), "Balance should remain above minimum stake");
         assertEq(staking.activeStakerCount(), initialActiveStakerCount, "Active staker count should not change");
-        
+
         // Third 1 wei unstake
         staking.unstake(1);
-        
+
         // Check Bob's state - should still be active
         (uint256 bobBalanceAfterUnstake3,,,,) = staking.getUserInfo(bob);
         assertEq(bobBalanceAfterUnstake3, largeStake - 3, "Balance should decrease by another 1 wei");
         assertTrue(bobBalanceAfterUnstake3 > staking.minStakeAmount(), "Balance should remain above minimum stake");
         assertEq(staking.activeStakerCount(), initialActiveStakerCount, "Active staker count should not change");
-        
+
         vm.stopPrank();
-        
+
         // Charlie stakes again - should pass
         vm.startPrank(charlie);
-        
+
         uint256 additionalStake = MIN_STAKE;
         token.approve(address(staking), additionalStake);
         staking.stake(additionalStake);
-        
+
         // Check Charlie's state - should have increased balance
         (uint256 charlieBalance,,,,) = staking.getUserInfo(charlie);
         assertEq(charlieBalance, largeStake + additionalStake, "Balance should increase by additional stake amount");
-        
+
         vm.stopPrank();
-        
+
         // Verify the total staked amount is correct
         uint256 expectedTotalStaked = largeStake // Alice
             + (largeStake - 3) // Bob after 3 wei unstake
             + (largeStake + additionalStake); // Charlie after additional stake
-        
+
         assertEq(staking.totalStaked(), expectedTotalStaked, "Total staked amount should be correct");
     }
 
@@ -2020,59 +2020,59 @@ contract LayerEdgeStakingTest is Test {
         uint256 largeStake = MIN_STAKE * 4;
         setupLargerStake(alice, largeStake); // For testing hasUnstaked restriction
         setupLargerStake(bob, MIN_STAKE / 2); // For testing below minStake restriction
-        
+
         // Advance time to accrue interest
         vm.warp(block.timestamp + 30 days);
-        
+
         // Test case 1: User who has unstaked cannot compound
         vm.startPrank(alice);
-        
+
         // Unstake a small amount to mark as hasUnstaked
         vm.warp(block.timestamp + 7 days + 1); // Past unstaking window
-        staking.unstake(MIN_STAKE * 4); 
-        
+        staking.unstake(MIN_STAKE * 4);
+
         // Verify user has unstaked flag
         (uint256 aliceBalance,,,,,,, bool aliceHasUnstaked,,) = staking.users(alice);
         assertEq(aliceBalance, largeStake - MIN_STAKE * 4, "Alice's balance should decrease by unstake amount");
 
         assertTrue(aliceHasUnstaked, "Alice should be marked as having unstaked");
-        
+
         // Alice tries to compound - should fail
         vm.expectRevert("Cannot compound after unstaking");
         staking.compoundInterest();
-        
+
         vm.stopPrank();
-        
+
         // Test case 2: User with balance < minStake cannot compound
         vm.startPrank(bob);
-        
+
         // Verify Bob's balance is below minStake
         (uint256 bobBalance,,,,) = staking.getUserInfo(bob);
         assertTrue(bobBalance < staking.minStakeAmount(), "Bob's balance should be below minimum stake");
-        
+
         // Bob tries to compound - should fail
         vm.expectRevert("Cannot compound after unstaking");
         staking.compoundInterest();
-        
+
         vm.stopPrank();
-        
+
         // Test case 3: User that has unstaked AND has balance < minStake
         vm.startPrank(bob);
-        
+
         // Bob unstakes a small amount to also set hasUnstaked flag
         vm.warp(block.timestamp + 7 days + 1); // Past unstaking window
         staking.unstake(100);
-        
+
         // Verify Bob has both conditions
         (uint256 newBobBalance,,,,,,, bool newBobHasUnstaked,,) = staking.users(bob);
         assertEq(newBobBalance, bobBalance - 100, "Bob's balance should decrease by 100");
         assertTrue(newBobBalance < staking.minStakeAmount(), "Bob's balance should be below minimum stake");
         assertTrue(newBobHasUnstaked, "Bob should be marked as having unstaked");
-        
+
         // Bob tries to compound - should fail (same error message)
         vm.expectRevert("Cannot compound after unstaking");
         staking.compoundInterest();
-        
+
         vm.stopPrank();
     }
 }
