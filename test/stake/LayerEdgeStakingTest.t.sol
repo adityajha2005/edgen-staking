@@ -149,23 +149,6 @@ contract LayerEdgeStakingTest is Test {
         assertEq(token.balanceOf(address(staking)), expectedContractBalance);
     }
 
-    function test_LayerEdgeStaking_TierSystem_BelowMinimumStake() public {
-        // Alice stakes below minimum
-        dealToken(alice, MIN_STAKE);
-        vm.prank(alice);
-        staking.stake(MIN_STAKE - 1);
-
-        // Check tier - should be tier 3 due to not meeting minimum
-        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier3));
-
-        // Alice adds more to reach minimum
-        vm.prank(alice);
-        staking.stake(1);
-
-        // Check tier - should now be tier 1 (first staker with min amount)
-        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier1));
-    }
-
     function test_LayerEdgeStaking_TierSystem_UnstakingDowngrade() public {
         // Setup multiple stakers
         setupMultipleStakers(5);
@@ -556,6 +539,9 @@ contract LayerEdgeStakingTest is Test {
         vm.prank(bob);
         staking.unstake(MIN_STAKE / 2);
         assertEq(uint256(staking.getCurrentTier(bob)), uint256(LayerEdgeStaking.Tier.Tier3));
+
+        // Active staker count should decrease
+        assertEq(staking.activeStakerCount(), 4);
 
         // Tiers should adjust:
         // - alice: still Tier 1
@@ -1700,7 +1686,7 @@ contract LayerEdgeStakingTest is Test {
         staking.stake(newMinStake);
         vm.stopPrank();
 
-        assertEq(uint256(staking.getCurrentTier(bob)), uint256(LayerEdgeStaking.Tier.Tier2));
+        assertEq(uint256(staking.getCurrentTier(bob)), uint256(LayerEdgeStaking.Tier.Tier1));
 
         vm.startPrank(charlie);
         token.approve(address(staking), MIN_STAKE);
@@ -1708,6 +1694,31 @@ contract LayerEdgeStakingTest is Test {
         vm.stopPrank();
 
         assertEq(uint256(staking.getCurrentTier(charlie)), uint256(LayerEdgeStaking.Tier.Tier3));
+    }
+
+    function test_LayerEdgeStaking_ShouldEarnCorectInterestRateWhenBelowMinimumStake() public {
+        vm.startPrank(alice);
+        token.approve(address(staking), MIN_STAKE - 1);
+        staking.stake(MIN_STAKE - 1);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 30 days);
+
+        (,,,, uint256 pendingRewards) = staking.getUserInfo(alice);
+        //Tier 3 APY is 20%
+        assertEq(pendingRewards, (MIN_STAKE - 1) * 20 * PRECISION * 30 days / (365 days * PRECISION) / 100);
+    }
+
+    function test_LayerEdgeStaking_ShouldRevertIfUserStakeAgainAfterStakingBelowMinimum() public {
+        vm.startPrank(alice);
+        token.approve(address(staking), MIN_STAKE - 1);
+        staking.stake(MIN_STAKE - 1);
+        vm.stopPrank();
+
+        vm.startPrank(alice);
+        vm.expectRevert("Cannot stake after unstaking");
+        staking.stake(MIN_STAKE);
+        vm.stopPrank();
     }
 
     function test_LayerEdgeStaking_SetMinStakeAmount_DoesNotAffectExistingStakers() public {
@@ -1816,5 +1827,171 @@ contract LayerEdgeStakingTest is Test {
         // Verify Alice's staked balance increased
         (uint256 balanceAfter,,,,) = staking.getUserInfo(alice);
         assertTrue(balanceAfter > balanceBefore, "Alice's staked balance should increase after compounding");
+    }
+
+    function test_LayerEdgeStaking_FenwickTree_PartialUnstaking() public {
+
+        
+        // Setup initial stakers with minimum stake to establish base state
+        setupMultipleStakers(3); // Setup charlie, bob, and alice with MIN_STAKE each
+        
+        // Record initial state
+        uint256 initialActiveStakerCount = staking.activeStakerCount();
+        
+        // Setup users with larger stakes
+        uint256 largeStake = MIN_STAKE * 4; // 4x minimum stake
+        setupLargerStake(david, largeStake);
+        setupLargerStake(eve, largeStake);
+        
+        // Advance time past unstaking window
+        vm.warp(block.timestamp + 7 days + 1);
+        
+        // Test case 1: Partial unstake that keeps balance above minimum
+        // David unstakes 25% of his balance
+        vm.startPrank(david);
+        uint256 davidInitialBalance = largeStake;
+        uint256 unstakeAmount1 = largeStake / 4; // 25% of stake
+        
+        staking.unstake(unstakeAmount1);
+        
+        // Check David's state - should still be active in tree
+        (uint256 davidBalanceAfterUnstake1,,,,) = staking.getUserInfo(david);
+        assertEq(davidBalanceAfterUnstake1, davidInitialBalance - unstakeAmount1, "Balance should decrease by unstake amount");
+        assertTrue(davidBalanceAfterUnstake1 > staking.minStakeAmount(), "Balance should remain above minimum stake");
+        
+        // Check active staker count - should remain unchanged
+        assertEq(staking.activeStakerCount(), initialActiveStakerCount + 2, "Active staker count should not change after partial unstake");
+        
+        // David unstakes another 25% but still above minimum
+        uint256 unstakeAmount2 = largeStake / 4;
+        staking.unstake(unstakeAmount2);
+        
+        // Check David's state again - should still be active
+        (uint256 davidBalanceAfterUnstake2,,,,) = staking.getUserInfo(david);
+        assertEq(
+            davidBalanceAfterUnstake2, 
+            davidBalanceAfterUnstake1 - unstakeAmount2, 
+            "Balance should decrease by second unstake amount"
+        );
+        assertTrue(davidBalanceAfterUnstake2 > staking.minStakeAmount(), "Balance should still remain above minimum stake");
+        
+        // Check active staker count - should still remain unchanged
+        assertEq(staking.activeStakerCount(), initialActiveStakerCount + 2, "Active staker count should not change after second partial unstake");
+        vm.stopPrank();
+        
+        // Test case 2: Multiple unstakes ending with unstake that drops below minimum
+        vm.startPrank(eve);
+        uint256 eveInitialBalance = largeStake;
+        
+        // First unstake - 60% of stake but still above minimum
+        uint256 eveUnstakeAmount1 = (largeStake * 60) / 100;
+        staking.unstake(eveUnstakeAmount1);
+        
+        // Check Eve's state - should still be active
+        (uint256 eveBalanceAfterUnstake1,,,,) = staking.getUserInfo(eve);
+        assertEq(eveBalanceAfterUnstake1, eveInitialBalance - eveUnstakeAmount1, "Balance should decrease by unstake amount");
+        assertTrue(eveBalanceAfterUnstake1 > staking.minStakeAmount(), "Balance should remain above minimum stake");
+        
+        // Check active staker count - should remain unchanged
+        assertEq(staking.activeStakerCount(), initialActiveStakerCount + 2, "Active staker count should not change after partial unstake");
+        
+        // Second unstake - pushes balance below minimum
+        uint256 eveUnstakeAmount2 = eveBalanceAfterUnstake1 - (staking.minStakeAmount() / 2);
+        staking.unstake(eveUnstakeAmount2);
+        
+        // Check Eve's state - should be removed from tree
+        (uint256 eveBalanceAfterUnstake2,,,,) = staking.getUserInfo(eve);
+        assertEq(
+            eveBalanceAfterUnstake2, 
+            eveBalanceAfterUnstake1 - eveUnstakeAmount2, 
+            "Balance should decrease by second unstake amount"
+        );
+        assertTrue(eveBalanceAfterUnstake2 < staking.minStakeAmount(), "Balance should now be below minimum stake");
+        
+        // Check active staker count - should decrease by 1
+        assertEq(staking.activeStakerCount(), initialActiveStakerCount + 1, "Active staker count should decrease after unstaking below minimum");
+        
+        // Verify Eve has been assigned to Tier 3 and is marked as inactive
+        (,, uint256 eveTierAPY,,) = staking.getUserInfo(eve);
+        assertEq(eveTierAPY, 20 * PRECISION, "User should be assigned Tier 3 APY after unstaking below minimum");
+
+        (,,,, ,,, bool eveHasUnstaked, bool eveIsActive,) = staking.users(eve);
+        assertTrue(eveHasUnstaked, "User should be marked as having unstaked");
+        assertFalse(eveIsActive, "User should be marked as inactive after unstaking below minimum");
+        vm.stopPrank();
+    }
+
+    // Create a new function to stake with larger amounts
+    function setupLargerStake(address user, uint256 amount) internal {
+        vm.startPrank(user);
+        token.approve(address(staking), amount);
+        staking.stake(amount);
+        vm.stopPrank();
+    }
+
+    function test_LayerEdgeStaking_FenwickTree_ShouldNotOverflowUnderflow() public {
+        // Setup initial stakers with 4x minimum stake
+        uint256 largeStake = MIN_STAKE * 4;
+        setupLargerStake(alice, largeStake);
+        setupLargerStake(bob, largeStake);
+        setupLargerStake(charlie, largeStake);
+        
+        // Record initial state
+        uint256 initialActiveStakerCount = staking.activeStakerCount();
+        
+        // Advance time past unstaking window
+        vm.warp(block.timestamp + 7 days + 1);
+        
+        // Bob unstakes 1 wei three times
+        vm.startPrank(bob);
+        
+        // First 1 wei unstake
+        staking.unstake(1);
+        
+        // Check Bob's state - should still be active
+        (uint256 bobBalanceAfterUnstake1,,,,) = staking.getUserInfo(bob);
+        assertEq(bobBalanceAfterUnstake1, largeStake - 1, "Balance should decrease by 1 wei");
+        assertTrue(bobBalanceAfterUnstake1 > staking.minStakeAmount(), "Balance should remain above minimum stake");
+        assertEq(staking.activeStakerCount(), initialActiveStakerCount, "Active staker count should not change");
+        
+        // Second 1 wei unstake
+        staking.unstake(1);
+        
+        // Check Bob's state - should still be active
+        (uint256 bobBalanceAfterUnstake2,,,,) = staking.getUserInfo(bob);
+        assertEq(bobBalanceAfterUnstake2, largeStake - 2, "Balance should decrease by another 1 wei");
+        assertTrue(bobBalanceAfterUnstake2 > staking.minStakeAmount(), "Balance should remain above minimum stake");
+        assertEq(staking.activeStakerCount(), initialActiveStakerCount, "Active staker count should not change");
+        
+        // Third 1 wei unstake
+        staking.unstake(1);
+        
+        // Check Bob's state - should still be active
+        (uint256 bobBalanceAfterUnstake3,,,,) = staking.getUserInfo(bob);
+        assertEq(bobBalanceAfterUnstake3, largeStake - 3, "Balance should decrease by another 1 wei");
+        assertTrue(bobBalanceAfterUnstake3 > staking.minStakeAmount(), "Balance should remain above minimum stake");
+        assertEq(staking.activeStakerCount(), initialActiveStakerCount, "Active staker count should not change");
+        
+        vm.stopPrank();
+        
+        // Charlie stakes again - should pass
+        vm.startPrank(charlie);
+        
+        uint256 additionalStake = MIN_STAKE;
+        token.approve(address(staking), additionalStake);
+        staking.stake(additionalStake);
+        
+        // Check Charlie's state - should have increased balance
+        (uint256 charlieBalance,,,,) = staking.getUserInfo(charlie);
+        assertEq(charlieBalance, largeStake + additionalStake, "Balance should increase by additional stake amount");
+        
+        vm.stopPrank();
+        
+        // Verify the total staked amount is correct
+        uint256 expectedTotalStaked = largeStake + // Alice
+                                      (largeStake - 3) + // Bob after 3 wei unstake
+                                      (largeStake + additionalStake); // Charlie after additional stake
+        
+        assertEq(staking.totalStaked(), expectedTotalStaked, "Total staked amount should be correct");
     }
 }
