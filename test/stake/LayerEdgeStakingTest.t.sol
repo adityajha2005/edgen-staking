@@ -2076,4 +2076,64 @@ contract LayerEdgeStakingTest is Test {
 
         vm.stopPrank();
     }
+
+    function test_LayerEdgeStaking_StakeAndUnstakeVariations() public {
+        // Alice stakes
+        vm.startPrank(alice);
+        token.approve(address(staking), MIN_STAKE);
+        staking.stake(MIN_STAKE);
+        vm.stopPrank();
+
+        // Assert in tree
+        (,,,,,,, bool outOfTree,,) = staking.users(alice);
+        assertFalse(outOfTree, "Alice should be in the tree");
+        // Assert tier is tier 1
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier1));
+        //Assert stakers count is 1
+        assertEq(staking.stakerCountInTree(), 1);
+
+        // Alice stakes again
+        vm.startPrank(alice);
+        token.approve(address(staking), MIN_STAKE);
+        staking.stake(MIN_STAKE);
+        vm.stopPrank();
+
+        // Assert in tree
+        (,,,,,,, outOfTree,,) = staking.users(alice);
+        assertFalse(outOfTree, "Alice should be in the tree");
+        // Assert tier is tier 1
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier1));
+        //Assert stakers count is 1
+        assertEq(staking.stakerCountInTree(), 1);
+
+        vm.warp(block.timestamp + 7 days + 1);
+        // Alice unstakes
+        vm.startPrank(alice);
+        staking.unstake(MIN_STAKE + 1);
+        vm.stopPrank();
+
+        // Assert out of tree
+        (,,,,,,, outOfTree,,) = staking.users(alice);
+        assertTrue(outOfTree, "Alice should be out of tree");
+        // Assert tier is tier 3
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier3));
+        //Assert stakers count is 0
+        assertEq(staking.stakerCountInTree(), 0);
+        assertEq(staking.stakerCountOutOfTree(), 1);
+
+        // Alice stakes again
+        vm.startPrank(alice);
+        token.approve(address(staking), MIN_STAKE);
+        staking.stake(MIN_STAKE);
+        vm.stopPrank();
+
+        // Assert out of tree
+        (,,,,,,, outOfTree,,) = staking.users(alice);
+        assertTrue(outOfTree, "Alice should be out of tree");
+        // Assert tier is tier 3
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier3));
+        //Assert stakers count is 0
+        assertEq(staking.stakerCountInTree(), 0);
+        assertEq(staking.stakerCountOutOfTree(), 1);
+    }
 }
