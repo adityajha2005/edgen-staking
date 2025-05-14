@@ -9,7 +9,6 @@ import {FenwickTree} from "@src/library/FenwickTree.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {IWETH} from "@interfaces/IWETH.sol";
-import {console2} from "forge-std/console2.sol";
 
 /**
  * @title LayerEdgeStaking
@@ -775,7 +774,11 @@ contract LayerEdgeStaking is
 
     function _recordTierChange(address user, Tier newTier) internal {
         // Get current tier
-        Tier old = getCurrentTier(user);
+        Tier old = Tier.Tier3;
+
+        if(stakerTierHistory[user].length > 0) {
+            old = stakerTierHistory[user][stakerTierHistory[user].length - 1].to;
+        }
 
         // If this is the same tier as before, no change to record
         if (

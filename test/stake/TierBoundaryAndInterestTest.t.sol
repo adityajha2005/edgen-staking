@@ -682,11 +682,15 @@ contract TierBoundaryAndInterestTest is Test {
         // Check tier history for Bob, who has moved tiers twice
         LayerEdgeStaking.TierEvent[] memory bobHistory = getTierHistory(bob);
         assertEq(bobHistory.length, 3);
-        assertEq(uint256(bobHistory[0].to), uint256(LayerEdgeStaking.Tier.Tier2)); // Initial tier
+        assertEq(uint256(bobHistory[0].from), uint256(LayerEdgeStaking.Tier.Tier3)); // Initial tier
+        assertEq(uint256(bobHistory[0].to), uint256(LayerEdgeStaking.Tier.Tier2));
+        assertEq(uint256(bobHistory[1].from), uint256(LayerEdgeStaking.Tier.Tier2));
         assertEq(uint256(bobHistory[1].to), uint256(LayerEdgeStaking.Tier.Tier1)); // Promoted when more users joined
+        assertEq(uint256(bobHistory[2].from), uint256(LayerEdgeStaking.Tier.Tier1));
         assertEq(uint256(bobHistory[2].to), uint256(LayerEdgeStaking.Tier.Tier2)); // Demoted when users left
     }
 
+    // Enable --via-ir to run this test
     // Test APY changes, dynamic tier boundaries, and interest calculation accuracy
     // function test_StakingTierBoundry_APYChanges_With_RandomUserMovement() public {
     //     // // This test verifies that the tiered staking system correctly:

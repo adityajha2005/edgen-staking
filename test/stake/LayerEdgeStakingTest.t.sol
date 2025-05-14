@@ -2278,8 +2278,8 @@ contract LayerEdgeStakingTest is Test {
                 staking.stakerTierHistory(bob, bobTierHistoryLengthAfter - 1);
 
             //TODO: fix this test
-            // assertEq(uint256(fromTier), uint256(LayerEdgeStaking.Tier.Tier2), 
-            //     "Bob's recorded tier change should be from Tier2");
+            assertEq(uint256(fromTier), uint256(LayerEdgeStaking.Tier.Tier2), 
+                "Bob's recorded tier change should be from Tier2");
             assertEq(uint256(toTier), uint256(LayerEdgeStaking.Tier.Tier1), 
                 "Bob's recorded tier change should be to Tier1");
         }
