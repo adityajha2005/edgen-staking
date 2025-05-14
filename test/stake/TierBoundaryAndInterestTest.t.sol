@@ -687,7 +687,7 @@ contract TierBoundaryAndInterestTest is Test {
         assertEq(uint256(bobHistory[2].to), uint256(LayerEdgeStaking.Tier.Tier2)); // Demoted when users left
     }
 
-    // // Test APY changes, dynamic tier boundaries, and interest calculation accuracy
+    // Test APY changes, dynamic tier boundaries, and interest calculation accuracy
     // function test_StakingTierBoundry_APYChanges_With_RandomUserMovement() public {
     //     // // This test verifies that the tiered staking system correctly:
     //     // // 1. Assigns users to tiers based on staking order and tier percentages
@@ -1035,5 +1035,302 @@ contract TierBoundaryAndInterestTest is Test {
             history[i] = LayerEdgeStaking.TierEvent(from, to, timestamp);
         }
         return history;
+    }
+
+    function test_TierBoundary_TierCountsUnchanged_WhenUserRemoved() public {
+        // This test verifies that when a user is removed and tier counts remain the same,
+        // the correct user's tier is still updated in the tier history
+        
+        // Setup 4 users with specific tier distribution
+        // This will create: 1 in Tier1, 1 in Tier2, 2 in Tier3
+        vm.prank(alice);
+        staking.stake(MIN_STAKE);
+        
+        vm.prank(bob);
+        staking.stake(MIN_STAKE);
+        
+        vm.prank(charlie);
+        staking.stake(MIN_STAKE);
+        
+        vm.prank(dave);
+        staking.stake(MIN_STAKE);
+        
+        // Verify initial tier distribution
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier1));
+        assertEq(uint256(staking.getCurrentTier(bob)), uint256(LayerEdgeStaking.Tier.Tier2));
+        assertEq(uint256(staking.getCurrentTier(charlie)), uint256(LayerEdgeStaking.Tier.Tier3));
+        assertEq(uint256(staking.getCurrentTier(dave)), uint256(LayerEdgeStaking.Tier.Tier3));
+        
+        // Record initial tier counts
+        (uint256 old_t1, uint256 old_t2, uint256 old_t3) = staking.getTierCounts();
+        assertEq(old_t1, 1);
+        assertEq(old_t2, 1);
+        assertEq(old_t3, 2);
+        
+        // Wait past the unstaking window
+        vm.warp(block.timestamp + 7 days + 1);
+        
+        // Now have Charlie (a Tier3 user) unstake
+        vm.prank(charlie);
+        staking.unstake(MIN_STAKE);
+        
+        // Check if tier counts actually remained the same
+        (uint256 new_t1, uint256 new_t2, uint256 new_t3) = staking.getTierCounts();
+        assertEq(new_t1, 1);
+        assertEq(new_t2, 1);
+        assertEq(new_t3, 1);
+        
+        // Assert tier count condition: tier counts remain the same
+        assertEq(old_t1, new_t1, "Tier 1 count should remain the same");
+        assertEq(old_t2, new_t2, "Tier 2 count should remain the same");
+        assertEq(old_t3 - 1, new_t3, "Tier 3 count should decrease by 1");
+        
+        // Verify alice and bob's tiers didn't change
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier1));
+        assertEq(uint256(staking.getCurrentTier(bob)), uint256(LayerEdgeStaking.Tier.Tier2));
+        assertEq(uint256(staking.getCurrentTier(dave)), uint256(LayerEdgeStaking.Tier.Tier3));
+        
+        // But the more important check: verify Dave's tier history shows proper tracking
+        // even though tier counts didn't change
+        LayerEdgeStaking.TierEvent[] memory daveHistory = getTierHistory(dave);
+        
+        // Dave's tier shouldn't have changed since counts remained the same, so history length should be 1
+        assertEq(daveHistory.length, 1);
+        assertEq(uint256(daveHistory[0].to), uint256(LayerEdgeStaking.Tier.Tier3));
+    }
+    
+    function test_TierBoundary_Tier1UserRemoved_TierCountsUnchanged() public {
+        // This test verifies that when a Tier 1 user is removed and tier counts remain the same,
+        // the correct tier promotion for Tier 2 user is recorded
+        
+        // Setup 32 users exactly to create a specific tier distribution
+        // This will create: 6 in Tier1, 9 in Tier2, 17 in Tier3
+        // 32 * 0.2 = 6.4 → 6 users in Tier1
+        // 32 * 0.3 = 9.6 → 9 users in Tier2
+        // 32 - 6 - 9 = 17 users in Tier3
+        
+        // First stake with our named users
+        vm.prank(alice);
+        staking.stake(MIN_STAKE);
+        
+        vm.prank(bob);
+        staking.stake(MIN_STAKE);
+        
+        vm.prank(charlie);
+        staking.stake(MIN_STAKE);
+        
+        vm.prank(dave);
+        staking.stake(MIN_STAKE);
+        
+        vm.prank(eve);
+        staking.stake(MIN_STAKE);
+        
+        // Add 27 more users to reach exactly 32
+        for (uint256 i = 0; i < 27; i++) {
+            address user = address(uint160(uint256(keccak256(abi.encodePacked("user", i)))));
+            dealToken(user, MIN_STAKE);
+            vm.prank(user);
+            staking.stake(MIN_STAKE);
+        }
+        
+        // Verify we have exactly 32 stakers
+        assertEq(staking.stakerCountInTree(), 32);
+        
+        // Get tier counts to verify our setup
+        (uint256 old_t1, uint256 old_t2, uint256 old_t3) = staking.getTierCounts();
+        assertEq(old_t1, 6, "Should have 6 users in Tier 1");
+        assertEq(old_t2, 9, "Should have 9 users in Tier 2");
+        assertEq(old_t3, 17, "Should have 17 users in Tier 3");
+        
+        // Verify Alice is in Tier 1 (she staked first)
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier1));
+        
+        // Find a user at position 7 (first user in Tier 2)
+        uint256 tier2FirstUserJoinId = staking.getCumulativeFrequency(7);
+        address tier2FirstUser = staking.stakerAddress(tier2FirstUserJoinId);
+        
+        // Ensure this user is actually in Tier 2
+        assertEq(uint256(staking.getCurrentTier(tier2FirstUser)), uint256(LayerEdgeStaking.Tier.Tier2));
+        
+        // Wait past the unstaking window
+        vm.warp(block.timestamp + 7 days + 1);
+        
+        // Now have Alice (a Tier1 user) unstake
+        vm.prank(alice);
+        staking.unstake(MIN_STAKE);
+        
+        // Now we have 31 users, tier counts should be:
+        // 31 * 0.2 = 6.2 → 6 users in Tier1 (unchanged)
+        // 31 * 0.3 = 9.3 → 9 users in Tier2 (unchanged)
+        // 31 - 6 - 9 = 16 users in Tier3 (decreased by 1)
+        
+        // Verify tier counts
+        (uint256 new_t1, uint256 new_t2, uint256 new_t3) = staking.getTierCounts();
+        assertEq(new_t1, 6, "Should still have 6 users in Tier 1");
+        assertEq(new_t2, 9, "Should still have 9 users in Tier 2");
+        assertEq(new_t3, 16, "Should have 16 users in Tier 3");
+        
+        // The critical check: verify the first Tier 2 user was promoted to Tier 1
+        // This is the key scenario the audit report mentioned
+        assertEq(uint256(staking.getCurrentTier(tier2FirstUser)), uint256(LayerEdgeStaking.Tier.Tier1), 
+            "First Tier 2 user should be promoted to Tier 1");
+        
+        // Also check their tier history to ensure the promotion was recorded
+        LayerEdgeStaking.TierEvent[] memory userHistory = getTierHistory(tier2FirstUser);
+        assertEq(userHistory.length, 3, "User should have 2 tier events");
+        assertEq(uint256(userHistory[0].to), uint256(LayerEdgeStaking.Tier.Tier3), "User should have started in Tier 3");
+        assertEq(uint256(userHistory[1].to), uint256(LayerEdgeStaking.Tier.Tier2), "User should have been promoted to Tier 2");
+        assertEq(uint256(userHistory[2].to), uint256(LayerEdgeStaking.Tier.Tier1), "User should have been promoted to Tier 1");
+    }
+    
+    function test_TierBoundary_TierCountsUnchanged_WhenUserAdded() public {
+        // This test verifies that when a user is added and tier counts remain the same,
+        // the appropriate tier assignments are still updated in the tier history
+        
+        // Setup 33 users to create a specific tier distribution where adding
+        // a user doesn't change tier counts
+        // 33 * 0.2 = 6.6 → 6 users in Tier1
+        // 33 * 0.3 = 9.9 → 9 users in Tier2
+        // 33 - 6 - 9 = 18 users in Tier3
+        
+        // After adding one more user (34 total):
+        // 34 * 0.2 = 6.8 → 6 users in Tier1 (unchanged)
+        // 34 * 0.3 = 10.2 → 10 users in Tier2 (increased by 1)
+        // 34 - 6 - 10 = 18 users in Tier3 (unchanged)
+        
+        // Stake with our named users first
+        vm.prank(alice);
+        staking.stake(MIN_STAKE);
+        
+        vm.prank(bob);
+        staking.stake(MIN_STAKE);
+        
+        vm.prank(charlie);
+        staking.stake(MIN_STAKE);
+        
+        vm.prank(dave);
+        staking.stake(MIN_STAKE);
+        
+        vm.prank(eve);
+        staking.stake(MIN_STAKE);
+        
+        // Add 28 more users to reach exactly 33
+        for (uint256 i = 0; i < 28; i++) {
+            address user = address(uint160(uint256(keccak256(abi.encodePacked("user", i)))));
+            dealToken(user, MIN_STAKE);
+            vm.prank(user);
+            staking.stake(MIN_STAKE);
+        }
+        
+        // Verify we have exactly 33 stakers
+        assertEq(staking.stakerCountInTree(), 33);
+        
+        // Get tier counts to verify our setup
+        (uint256 old_t1, uint256 old_t2, uint256 old_t3) = staking.getTierCounts();
+        assertEq(old_t1, 6, "Should have 6 users in Tier 1");
+        assertEq(old_t2, 9, "Should have 9 users in Tier 2");
+        assertEq(old_t3, 18, "Should have 18 users in Tier 3");
+        
+        // Find a user at position 16 (boundary between Tier2 and Tier3)
+        uint256 boundaryUserJoinId = staking.getCumulativeFrequency(15);
+        address lastTier2User = staking.stakerAddress(boundaryUserJoinId);
+        
+        // Find the first user in Tier3
+        uint256 firstTier3UserJoinId = staking.getCumulativeFrequency(16);
+        address firstTier3User = staking.stakerAddress(firstTier3UserJoinId);
+        
+        // Verify these users' tiers
+        assertEq(uint256(staking.getCurrentTier(lastTier2User)), uint256(LayerEdgeStaking.Tier.Tier2));
+        assertEq(uint256(staking.getCurrentTier(firstTier3User)), uint256(LayerEdgeStaking.Tier.Tier3));
+        
+        // Now add one more user (frank)
+        vm.prank(frank);
+        staking.stake(MIN_STAKE);
+        
+        // Verify tier counts after adding the user
+        (uint256 new_t1, uint256 new_t2, uint256 new_t3) = staking.getTierCounts();
+        assertEq(new_t1, 6, "Should still have 6 users in Tier 1");
+        assertEq(new_t2, 10, "Should now have 10 users in Tier 2");
+        assertEq(new_t3, 18, "Should still have 18 users in Tier 3");
+        
+        // The critical check: verify the first user from Tier 3 was promoted to Tier 2
+        assertEq(uint256(staking.getCurrentTier(firstTier3User)), uint256(LayerEdgeStaking.Tier.Tier2), 
+            "First Tier 3 user should be promoted to Tier 2");
+        
+        // Check tier history to ensure the promotion was recorded
+        LayerEdgeStaking.TierEvent[] memory userHistory = getTierHistory(firstTier3User);
+        assertEq(userHistory.length, 2, "User should have 2 tier events");
+        assertEq(uint256(userHistory[0].to), uint256(LayerEdgeStaking.Tier.Tier3), "User should have started in Tier 3");
+        assertEq(uint256(userHistory[1].to), uint256(LayerEdgeStaking.Tier.Tier2), "User should have been promoted to Tier 2");
+    }
+    
+    function test_TierBoundary_Tier2UserRemoved_TierCountsUnchanged() public {
+        // This test verifies that when a Tier 2 user is removed and tier counts remain the same,
+        // the correct tier promotion occurs from Tier 3 to Tier 2
+        
+        // Setup 32 users exactly to create a specific tier distribution
+        // This will create: 6 in Tier1, 9 in Tier2, 17 in Tier3
+        
+        // First stake with our named users
+        vm.prank(alice);
+        staking.stake(MIN_STAKE);
+        
+        vm.prank(bob);
+        staking.stake(MIN_STAKE);
+        
+        vm.prank(charlie);
+        staking.stake(MIN_STAKE);
+        
+        vm.prank(dave);
+        staking.stake(MIN_STAKE);
+        
+        vm.prank(eve);
+        staking.stake(MIN_STAKE);
+        
+        // Add 27 more users to reach exactly 32
+        for (uint256 i = 0; i < 27; i++) {
+            address user = address(uint160(uint256(keccak256(abi.encodePacked("user", i)))));
+            dealToken(user, MIN_STAKE);
+            vm.prank(user);
+            staking.stake(MIN_STAKE);
+        }
+        
+        // Verify we have exactly 32 stakers
+        assertEq(staking.stakerCountInTree(), 32);
+        
+        // Find the last user in Tier 2 (at position 15)
+        uint256 lastTier2UserJoinId = staking.getCumulativeFrequency(15);
+        address lastTier2User = staking.stakerAddress(lastTier2UserJoinId);
+        
+        // Find the first user in Tier 3 (at position 16)
+        uint256 firstTier3UserJoinId = staking.getCumulativeFrequency(16);
+        address firstTier3User = staking.stakerAddress(firstTier3UserJoinId);
+        
+        // Verify these users' tiers
+        assertEq(uint256(staking.getCurrentTier(lastTier2User)), uint256(LayerEdgeStaking.Tier.Tier2));
+        assertEq(uint256(staking.getCurrentTier(firstTier3User)), uint256(LayerEdgeStaking.Tier.Tier3));
+        
+        // Wait past the unstaking window
+        vm.warp(block.timestamp + 7 days + 1);
+        
+        // Now have the last Tier 2 user unstake
+        vm.prank(lastTier2User);
+        staking.unstake(MIN_STAKE);
+        
+        // Verify tier counts after removal
+        (uint256 new_t1, uint256 new_t2, uint256 new_t3) = staking.getTierCounts();
+        assertEq(new_t1, 6, "Should still have 6 users in Tier 1");
+        assertEq(new_t2, 9, "Should still have 9 users in Tier 2");
+        assertEq(new_t3, 16, "Should have 16 users in Tier 3");
+        
+        // The key check: verify the first Tier 3 user was promoted to Tier 2
+        assertEq(uint256(staking.getCurrentTier(firstTier3User)), uint256(LayerEdgeStaking.Tier.Tier2), 
+            "First Tier 3 user should be promoted to Tier 2");
+        
+        // Check tier history to ensure the promotion was recorded
+        LayerEdgeStaking.TierEvent[] memory userHistory = getTierHistory(firstTier3User);
+        assertEq(userHistory.length, 2, "User should have 2 tier events");
+        assertEq(uint256(userHistory[0].to), uint256(LayerEdgeStaking.Tier.Tier3), "User should have started in Tier 3");
+        assertEq(uint256(userHistory[1].to), uint256(LayerEdgeStaking.Tier.Tier2), "User should have been promoted to Tier 2");
     }
 }

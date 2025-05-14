@@ -706,7 +706,6 @@ contract LayerEdgeStaking is
         totalStaked -= amount;
 
         if (!user.outOfTree && user.balance < minStakeAmount) {
-            console2.log('unstake');
             // execute this before removing from tree, this will make sure to calculate interest
             //for amount left after unstake
             _recordTierChange(userAddr, Tier.Tier3);
@@ -715,13 +714,8 @@ contract LayerEdgeStaking is
             user.outOfTree = true;
             stakerCountOutOfTree++;
 
-            console2.log('stakerCountInTree', stakerCountInTree);
-            console2.log('stakerCountOutOfTree', stakerCountOutOfTree);
-            console2.log('totalStakersSnapshot[userAddr]', totalStakersSnapshot[userAddr]);
-
             // Record any boundary crossings only if active staker count has changed
             if (totalStakersSnapshot[userAddr] != stakerCountInTree) {
-                console2.log('is this being called?');
                 _checkBoundariesAndRecord(true);
             }
 
@@ -807,47 +801,81 @@ contract LayerEdgeStaking is
         // new thresholds
         (uint256 new_t1, uint256 new_t2,) = getTierCountForStakerCount(n);
 
-        // for each boundary, if it shifted by ±1, find the user crossing
-        if (new_t1 != 0 && new_t1 != old_t1) {
-            // someone moved across Tier1↔Tier2
-            // the user at rank = min(old_t1, new_t1)+1 if promotion, or old_t1 if demotion
-            uint256 crossRank = new_t1 > old_t1
-                ? new_t1 // promotion: the one newly entering Tier1
-                : old_t1; // demotion: the one kicked out of Tier1
-            uint256 joinIdCross = stakerTree.findByCumulativeFrequency(crossRank);
-            address userCross = stakerAddress[joinIdCross];
-            uint256 rank = stakerTree.query(joinIdCross);
-            Tier toTier = _computeTierByRank(rank, n);
-            _recordTierChange(userCross, toTier);
+        // Tier 1 boundary handling
+        if (new_t1 != 0) {
+            if (new_t1 != old_t1) {
+                // Tier boundary change - handle as before
+                uint256 crossRank = new_t1 > old_t1
+                    ? new_t1 // promotion: the one newly entering Tier1
+                    : old_t1; // demotion: the one kicked out of Tier1
+                uint256 joinIdCross = stakerTree.findByCumulativeFrequency(crossRank);
+                address userCross = stakerAddress[joinIdCross];
+                uint256 rank = stakerTree.query(joinIdCross);
+                Tier toTier = _computeTierByRank(rank, n);
+                _recordTierChange(userCross, toTier);
+            } 
+            // Handle case where Tier 1 count stays the same
+            else if (isRemoval && new_t1 > 0) {
+                // If a user was removed but tier 1 count didn't change
+                // We need to update the user at position new_t1 (someone from Tier 2 may need promotion)
+                uint256 joinIdCross = stakerTree.findByCumulativeFrequency(new_t1);
+                address userCross = stakerAddress[joinIdCross];
+                // Recalculate user's tier and record if needed
+                uint256 rank = stakerTree.query(joinIdCross);
+                Tier toTier = _computeTierByRank(rank, n);
+                _recordTierChange(userCross, toTier);
+            }
+            else if (!isRemoval) {
+                // If a user was added, the user at position old_t1 might have changed tiers
+                uint256 joinIdCross = stakerTree.findByCumulativeFrequency(old_t1);
+                address userCross = stakerAddress[joinIdCross];
+                // Recalculate user's tier and record if needed
+                uint256 rank = stakerTree.query(joinIdCross);
+                Tier toTier = _computeTierByRank(rank, n);
+                _recordTierChange(userCross, toTier);
+            }
         }
 
-        if (new_t2 != old_t2) {
-            // Tier2↔Tier3 boundary
-            console2.log('tier2 to tier3 boundary');
-            console2.log('new_t2', new_t2);
-            console2.log('old_t2', old_t2);
-            console2.log('new_t1', new_t1);
-            console2.log('old_t1', old_t1);
-            uint256 crossRank;
-            if (new_t2 > old_t2) {
-                // Promotion
-                console2.log('promotion');
-                crossRank = new_t2 + new_t1; //Add new_t1 count to land on correct index/rank
-            } else {
-                // Demotion
-                console2.log('demotion');
-                crossRank = old_t2 + new_t1; //Add new_t1 count to land on correct index/rank
+        // Tier 2 boundary handling
+        if (new_t1 + new_t2 > 0) { // Ensure there are stakers in Tier 1 or Tier 2
+            if (new_t2 != old_t2) {
+                // Tier 2 boundary changed - handle as before
+                uint256 crossRank;
+                if (new_t2 > old_t2) {
+                    // Promotion
+                    crossRank = new_t1 + new_t2; // Add new_t1 count to land on correct index/rank
+                } else {
+                    // Demotion
+                    crossRank = new_t1 + old_t2; // Add new_t1 count to land on correct index/rank
+                }
+                uint256 joinIdCross = stakerTree.findByCumulativeFrequency(crossRank);
+                address userCross = stakerAddress[joinIdCross];
+                uint256 rank = stakerTree.query(joinIdCross);
+                Tier toTier = _computeTierByRank(rank, n);
+                _recordTierChange(userCross, toTier);
             }
-            console2.log('crossRank', crossRank);
-            uint256 joinIdCross = stakerTree.findByCumulativeFrequency(crossRank);
-            address userCross = stakerAddress[joinIdCross];
-            uint256 rank = stakerTree.query(joinIdCross);
-            console2.log('joinIdCross', joinIdCross);
-            console2.log('userCross', userCross);
-            console2.log('rank', rank);
-            Tier toTier = _computeTierByRank(rank, n);
-            console2.log('toTier', uint256(toTier));
-            _recordTierChange(userCross, toTier);
+            // Handle case where Tier 2 count stays the same
+            else if (isRemoval) {
+                // If a user was removed but tier 2 count didn't change
+                // We need to update the user at boundary between Tier 2 and Tier 3
+                uint256 crossRank = new_t1 + new_t2; // Boundary position
+                uint256 joinIdCross = stakerTree.findByCumulativeFrequency(crossRank);
+                address userCross = stakerAddress[joinIdCross];
+                // Recalculate user's tier and record if needed
+                uint256 rank = stakerTree.query(joinIdCross);
+                Tier toTier = _computeTierByRank(rank, n);
+                _recordTierChange(userCross, toTier);
+            }
+            else if (!isRemoval) {
+                // If a user was added, the user at old boundary between Tier 2 and Tier 3 might have changed
+                uint256 crossRank = old_t1 + old_t2; // Old boundary position
+                uint256 joinIdCross = stakerTree.findByCumulativeFrequency(crossRank);
+                address userCross = stakerAddress[joinIdCross];
+                // Recalculate user's tier and record if needed
+                uint256 rank = stakerTree.query(joinIdCross);
+                Tier toTier = _computeTierByRank(rank, n);
+                _recordTierChange(userCross, toTier);
+            }
         }
     }
 
