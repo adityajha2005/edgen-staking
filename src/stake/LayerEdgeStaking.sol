@@ -203,7 +203,6 @@ contract LayerEdgeStaking is
         uint256 claimable = user.interestEarned;
 
         require(claimable > 0, "Nothing to compound");
-        require(!user.outOfTree, "Cannot compound after unstaking");
 
         // Check if we have enough rewards in the contract
         require(rewardsReserve >= claimable, "Insufficient rewards in contract");

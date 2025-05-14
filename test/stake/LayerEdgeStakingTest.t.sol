@@ -375,22 +375,50 @@ contract LayerEdgeStakingTest is Test {
         // Advance time by 30 days to accrue rewards
         vm.warp(block.timestamp + 30 days);
 
-        // Alice unstakes partial amount after unstaking window
-        vm.warp(block.timestamp + 7 days);
+        //Assert interest accured for alice
+        (,,,, uint256 pendingRewardsBeforeUnstake) = staking.getUserInfo(alice);
+        assertEq(pendingRewardsBeforeUnstake, (MIN_STAKE * 50 * PRECISION * 30 days) / (365 days * PRECISION) / 100);
+
         vm.prank(alice);
         staking.unstake(MIN_STAKE / 2);
+
+        //Assert out or tree and tier 3
+        (,,,,,,, bool outOfTreeAfterUnstake,,) = staking.users(alice);
+        assertTrue(outOfTreeAfterUnstake);
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier3));
 
         // Advance time to accrue more rewards (now at tier 3)
         vm.warp(block.timestamp + 30 days);
 
-        // Try to compound rewards (should fail because user has unstaked)
+        //Assert interest accured for alice
+        (,,,, uint256 pendingRewardsAfterUnstake) = staking.getUserInfo(alice);
+        assertEq(pendingRewardsAfterUnstake, pendingRewardsBeforeUnstake + (MIN_STAKE/2 * 20 * PRECISION * 30 days) / (365 days * PRECISION) / 100);
+
         vm.prank(alice);
-        vm.expectRevert("Cannot compound after unstaking");
         staking.compoundInterest();
+
+        //Assert interest accured for alice
+        (uint256 newBalance,,,, uint256 pendingRewardsAfterCompound) = staking.getUserInfo(alice);
+        assertEq(pendingRewardsAfterCompound, 0);
+        assertEq(newBalance, MIN_STAKE/2 + pendingRewardsAfterUnstake);
+
+
+        vm.warp(block.timestamp + 30 days);
+
+        //Assert interest accured for alice
+        (,,,, uint256 pendingRewardsAfterCompound2) = staking.getUserInfo(alice);
+        assertEq(pendingRewardsAfterCompound2, (MIN_STAKE/2 + pendingRewardsAfterUnstake) * 20 * PRECISION * 30 days / (365 days * PRECISION) / 100);
+
+        uint256 balanceBeforeClaim = token.balanceOf(alice);
 
         // Alice should still be able to claim rewards normally
         vm.prank(alice);
         staking.claimInterest();
+
+        //Assert interest accured for alice
+        (,,,, uint256 pendingRewardsAfterClaim) = staking.getUserInfo(alice);
+        assertEq(pendingRewardsAfterClaim, 0);
+        assertEq(token.balanceOf(alice), balanceBeforeClaim + pendingRewardsAfterCompound2);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -2014,67 +2042,6 @@ contract LayerEdgeStakingTest is Test {
             + (largeStake + additionalStake); // Charlie after additional stake
 
         assertEq(staking.totalStaked(), expectedTotalStaked, "Total staked amount should be correct");
-    }
-
-    function test_LayerEdgeStaking_CompoundingRestrictions() public {
-        // Setup - initial stakes
-        uint256 largeStake = MIN_STAKE * 4;
-        setupLargerStake(alice, largeStake); // For testing outOfTree restriction
-        setupLargerStake(bob, MIN_STAKE / 2); // For testing below minStake restriction
-
-        // Advance time to accrue interest
-        vm.warp(block.timestamp + 30 days);
-
-        // Test case 1: User who has unstaked cannot compound
-        vm.startPrank(alice);
-
-        // Unstake a small amount to mark as outOfTree
-        vm.warp(block.timestamp + 7 days + 1); // Past unstaking window
-        staking.unstake(MIN_STAKE * 4);
-
-        // Verify user has unstaked flag
-        (uint256 aliceBalance,,,,,,, bool aliceOutOfTree,,) = staking.users(alice);
-        assertEq(aliceBalance, largeStake - MIN_STAKE * 4, "Alice's balance should decrease by unstake amount");
-
-        assertTrue(aliceOutOfTree, "Alice should be marked as out of tree");
-
-        // Alice tries to compound - should fail
-        vm.expectRevert("Cannot compound after unstaking");
-        staking.compoundInterest();
-
-        vm.stopPrank();
-
-        // Test case 2: User with balance < minStake cannot compound
-        vm.startPrank(bob);
-
-        // Verify Bob's balance is below minStake
-        (uint256 bobBalance,,,,) = staking.getUserInfo(bob);
-        assertTrue(bobBalance < staking.minStakeAmount(), "Bob's balance should be below minimum stake");
-
-        // Bob tries to compound - should fail
-        vm.expectRevert("Cannot compound after unstaking");
-        staking.compoundInterest();
-
-        vm.stopPrank();
-
-        // Test case 3: User that has unstaked AND has balance < minStake
-        vm.startPrank(bob);
-
-        // Bob unstakes a small amount to also set outOfTree flag
-        vm.warp(block.timestamp + 7 days + 1); // Past unstaking window
-        staking.unstake(100);
-
-        // Verify Bob has both conditions
-        (uint256 newBobBalance,,,,,,, bool newBobOutOfTree,,) = staking.users(bob);
-        assertEq(newBobBalance, bobBalance - 100, "Bob's balance should decrease by 100");
-        assertTrue(newBobBalance < staking.minStakeAmount(), "Bob's balance should be below minimum stake");
-        assertTrue(newBobOutOfTree, "Bob should be marked as out of tree");
-
-        // Bob tries to compound - should fail (same error message)
-        vm.expectRevert("Cannot compound after unstaking");
-        staking.compoundInterest();
-
-        vm.stopPrank();
     }
 
     function test_LayerEdgeStaking_StakeAndUnstakeVariations() public {
