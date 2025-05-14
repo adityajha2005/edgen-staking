@@ -36,7 +36,6 @@ contract LayerEdgeStaking is
     uint256 public constant SECONDS_IN_YEAR = 365 days;
     uint256 public constant PRECISION = 1e18;
     uint256 public constant UNSTAKE_WINDOW = 7 days;
-    // $100 worth of EDGEN (~3k tokens)
     uint256 public constant MAX_USERS = 100_000_000;
 
     // Tier percentages
@@ -91,7 +90,6 @@ contract LayerEdgeStaking is
     mapping(address => UserInfo) public users;
     mapping(uint256 => address) public stakerAddress;
     mapping(address => TierEvent[]) public stakerTierHistory;
-    mapping(address => uint256) public totalStakersSnapshot;
     uint256 public stakerCountInTree;
     uint256 public stakerCountOutOfTree;
     uint256 public totalStaked;
@@ -520,14 +518,6 @@ contract LayerEdgeStaking is
     }
 
     /**
-     * @notice Get the amount of reward tokens available in the contract
-     * @return Available rewards
-     */
-    function getAvailableRewards() external view returns (uint256) {
-        return rewardsReserve;
-    }
-
-    /**
      * @notice Get the APY rate for a specific tier during a time period
      * @param tier The tier to get the APY for
      * @param startTime Start time of the period
@@ -626,6 +616,57 @@ contract LayerEdgeStaking is
     }
 
     /*//////////////////////////////////////////////////////////////
+                        UI DATA PROVIDERS
+    //////////////////////////////////////////////////////////////*/
+    function getAllInfoOfUser(address userAddr)
+        external
+        view
+        returns (
+            UserInfo memory user,
+            Tier tier,
+            uint256 apy,
+            uint256 depositTime,
+            uint256 pendingRewards,
+            TierEvent[] memory tierHistory
+        )
+    {
+        user = users[userAddr];
+        tier = getCurrentTier(userAddr);
+        apy = getUserAPY(userAddr);
+        depositTime = user.depositTime;
+        pendingRewards = calculateUnclaimedInterest(userAddr);
+        tierHistory = stakerTierHistory[userAddr];
+    }
+
+    function getAllStakingInfo()
+        external
+        view
+        returns (
+            uint256 _totalStaked,
+            uint256 _stakerCountInTree,
+            uint256 _stakerCountOutOfTree,
+            uint256 _rewardsReserve,
+            uint256 _minStakeAmount,
+            uint256 _tier1Count,
+            uint256 _tier2Count,
+            uint256 _tier3Count
+        )
+    {
+        (_tier1Count, _tier2Count, _tier3Count) = getTierCountForStakerCount(stakerCountInTree);
+
+        return (
+            totalStaked,
+            stakerCountInTree,
+            stakerCountOutOfTree,
+            rewardsReserve,
+            minStakeAmount,
+            _tier1Count,
+            _tier2Count,
+            _tier3Count
+        );
+    }
+
+    /*//////////////////////////////////////////////////////////////
                         INTERNAL FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
@@ -667,13 +708,7 @@ contract LayerEdgeStaking is
             user.isFirstDepositMoreThanMinStake = true;
 
             _recordTierChange(userAddr, tier);
-
-            // Record any boundary crossings only if active staker count has changed
-            if (totalStakersSnapshot[userAddr] != stakerCountInTree) {
-                _checkBoundariesAndRecord(false);
-            }
-
-            totalStakersSnapshot[userAddr] = stakerCountInTree;
+            _checkBoundariesAndRecord(false);
         }
 
         // Update user balances
@@ -712,13 +747,7 @@ contract LayerEdgeStaking is
             stakerCountInTree--;
             user.outOfTree = true;
             stakerCountOutOfTree++;
-
-            // Record any boundary crossings only if active staker count has changed
-            if (totalStakersSnapshot[userAddr] != stakerCountInTree) {
-                _checkBoundariesAndRecord(true);
-            }
-
-            totalStakersSnapshot[userAddr] = stakerCountInTree;
+            _checkBoundariesAndRecord(true);
         }
 
         // Transfer tokens from contract to user
@@ -776,7 +805,7 @@ contract LayerEdgeStaking is
         // Get current tier
         Tier old = Tier.Tier3;
 
-        if(stakerTierHistory[user].length > 0) {
+        if (stakerTierHistory[user].length > 0) {
             old = stakerTierHistory[user][stakerTierHistory[user].length - 1].to;
         }
 
@@ -812,21 +841,21 @@ contract LayerEdgeStaking is
                     ? new_t1 // promotion: the one newly entering Tier1
                     : old_t1; // demotion: the one kicked out of Tier1
                 _findAndRecordTierChange(crossRank, n);
-            } 
+            }
             // Handle case where Tier 1 count stays the same
             else if (isRemoval && new_t1 > 0) {
                 // If a user was removed but tier 1 count didn't change
                 // We need to update the user at position new_t1 (someone from Tier 2 may need promotion)
                 _findAndRecordTierChange(new_t1, n);
-            }
-            else if (!isRemoval) {
+            } else if (!isRemoval) {
                 // If a user was added, the user at position old_t1 might have changed tiers
                 _findAndRecordTierChange(old_t1, n);
             }
         }
 
         // Tier 2 boundary handling
-        if (new_t1 + new_t2 > 0) { // Ensure there are stakers in Tier 1 or Tier 2
+        if (new_t1 + new_t2 > 0) {
+            // Ensure there are stakers in Tier 1 or Tier 2
             if (new_t2 != old_t2) {
                 // Tier 2 boundary changed - handle as before
                 uint256 crossRank;
@@ -845,8 +874,7 @@ contract LayerEdgeStaking is
                 // We need to update the user at boundary between Tier 2 and Tier 3
                 uint256 crossRank = new_t1 + new_t2; // Boundary position
                 _findAndRecordTierChange(crossRank, n);
-            }
-            else if (!isRemoval) {
+            } else if (!isRemoval) {
                 // If a user was added, the user at old boundary between Tier 2 and Tier 3 might have changed
                 uint256 crossRank = old_t1 + old_t2; // Old boundary position
                 _findAndRecordTierChange(crossRank, n);
