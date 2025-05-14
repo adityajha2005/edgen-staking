@@ -392,7 +392,10 @@ contract LayerEdgeStakingTest is Test {
 
         //Assert interest accured for alice
         (,,,, uint256 pendingRewardsAfterUnstake) = staking.getUserInfo(alice);
-        assertEq(pendingRewardsAfterUnstake, pendingRewardsBeforeUnstake + (MIN_STAKE/2 * 20 * PRECISION * 30 days) / (365 days * PRECISION) / 100);
+        assertEq(
+            pendingRewardsAfterUnstake,
+            pendingRewardsBeforeUnstake + (MIN_STAKE / 2 * 20 * PRECISION * 30 days) / (365 days * PRECISION) / 100
+        );
 
         vm.prank(alice);
         staking.compoundInterest();
@@ -400,14 +403,16 @@ contract LayerEdgeStakingTest is Test {
         //Assert interest accured for alice
         (uint256 newBalance,,,, uint256 pendingRewardsAfterCompound) = staking.getUserInfo(alice);
         assertEq(pendingRewardsAfterCompound, 0);
-        assertEq(newBalance, MIN_STAKE/2 + pendingRewardsAfterUnstake);
-
+        assertEq(newBalance, MIN_STAKE / 2 + pendingRewardsAfterUnstake);
 
         vm.warp(block.timestamp + 30 days);
 
         //Assert interest accured for alice
         (,,,, uint256 pendingRewardsAfterCompound2) = staking.getUserInfo(alice);
-        assertEq(pendingRewardsAfterCompound2, (MIN_STAKE/2 + pendingRewardsAfterUnstake) * 20 * PRECISION * 30 days / (365 days * PRECISION) / 100);
+        assertEq(
+            pendingRewardsAfterCompound2,
+            (MIN_STAKE / 2 + pendingRewardsAfterUnstake) * 20 * PRECISION * 30 days / (365 days * PRECISION) / 100
+        );
 
         uint256 balanceBeforeClaim = token.balanceOf(alice);
 
