@@ -206,6 +206,7 @@ Note: When a user joins or leaves the system, at most two people's tier will be 
 - Any user who stakes less than `minStakeAmount` will be in Tier3 permanently and out of the tree/tier system(won't get promoted) even if they stake more later.
 - Any user who unstakes and if the balance goes less than `minStakeAmount` they will also be moved out of the tree/tier system and will be in Tier 3 permanently.
 - Any users who is out of the tree/system can stake more at any time but will only be earning interest at Tier3 apy.
+- If compounding is enabled globally, all the active users should be able to compound and earn interest with respective to their tier. This also includes user whose balance is less than `minStakeAmount` and in Tier3.
 
 ## Administrative Functions
 
