@@ -2384,4 +2384,61 @@ contract LayerEdgeStakingTest is Test {
         assertEq(tier2Count, 1, "Should now have 1 staker in Tier2");
         assertEq(tier3Count, 4, "Should still have 4 stakers in Tier3");
     }
+
+    //Multiple partial stake and unstake
+    function test_LayerEdgeStaking_MultiplePartialStakeAndUnstake() public {
+        //Alice stakes minstake
+        vm.startPrank(alice);
+        token.approve(address(staking), MIN_STAKE * 10);
+        staking.stake(MIN_STAKE);
+
+        (uint256 balance,,,,,,,,,) = staking.users(alice);
+        assertEq(balance, MIN_STAKE);
+        assertEq(staking.totalStaked(), MIN_STAKE);
+        assertEq(staking.stakerCountInTree(), 1);
+        assertEq(staking.stakerCountOutOfTree(), 0);
+
+        staking.stake(MIN_STAKE);
+
+        (balance,,,,,,,,,) = staking.users(alice);
+        assertEq(balance, MIN_STAKE * 2);
+        assertEq(staking.totalStaked(), MIN_STAKE * 2);
+        assertEq(staking.stakerCountInTree(), 1);
+        assertEq(staking.stakerCountOutOfTree(), 0);
+
+        staking.stake(MIN_STAKE);
+
+        (balance,,,,,,,,,) = staking.users(alice);
+        assertEq(balance, MIN_STAKE * 3);
+        assertEq(staking.totalStaked(), MIN_STAKE * 3);
+        assertEq(staking.stakerCountInTree(), 1);
+        assertEq(staking.stakerCountOutOfTree(), 0);
+
+        vm.warp(block.timestamp + 7 days + 1);
+        staking.unstake(MIN_STAKE);
+
+        (balance,,,,,,,,,) = staking.users(alice);
+        assertEq(balance, MIN_STAKE * 2);
+        assertEq(staking.totalStaked(), MIN_STAKE * 2);
+        assertEq(staking.stakerCountInTree(), 1);
+        assertEq(staking.stakerCountOutOfTree(), 0);
+
+        staking.unstake(MIN_STAKE);
+
+        (balance,,,,,,,,,) = staking.users(alice);
+        assertEq(balance, MIN_STAKE);
+        assertEq(staking.totalStaked(), MIN_STAKE);
+        assertEq(staking.stakerCountInTree(), 1);
+        assertEq(staking.stakerCountOutOfTree(), 0);
+
+        staking.unstake(1);
+
+        (balance,,,,,,,,,) = staking.users(alice);
+        assertEq(balance, MIN_STAKE - 1);
+        assertEq(staking.totalStaked(), MIN_STAKE - 1);
+        assertEq(staking.stakerCountInTree(), 0);
+        assertEq(staking.stakerCountOutOfTree(), 1);
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier3));
+        vm.stopPrank();
+    }
 }
