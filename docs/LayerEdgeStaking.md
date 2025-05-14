@@ -201,6 +201,12 @@ When a user joins or leaves, the contract:
 
 Note: When a user joins or leaves the system, at most two people's tier will be changed and the method `_checkBoundariesAndRecord` will find exactly whose tier is going to change and record them.
 
+### Key points to note
+- Any user who stakes less than `minStakeAmount` will be in Tier3 permanently and out of the tree/tier system(won't get promoted) even if they stake more later.
+- Any user who unstakes and the balance went less than `minStakeAmount` they will also be moved out of the tree/tier system and will be in Tier 3 permanently.
+- Any users who is out of the tree/system can stake more at any time but will only be earning interest at Tier3 apy.
+- Compounding is not allowed for user who is out of the tree/system.
+
 ## Administrative Functions
 
 ### APY Management
@@ -350,5 +356,7 @@ The contract uses OpenZeppelin's UUPS (Universal Upgradeable Proxy Standard) pat
    - Direct ETH transfer vulnerabilities
    - Potential balance tracking issues
 
-Note: This staking contract will be deploy on Ethereum(or other evems) or LayerEdge's L1 (EVM compatible). On Ethereum, the staking token will be a simple ERC20 contract(Openzeppelin's implementation), here only the methods stake, unstake and claimInterest will be used. 
-On LayerEdge's L1, the staking token will be a WETH9 implementation, a wrapper of native token. Here the methods stakeNative, unstakeNative and claimInterestNative will be used.
+Note: The staking contract will be deployed on Ethereum(or other evems) and on LayerEdge's L1 (EVM compatible). 
+On Ethereum, the staking token will be a simple ERC20 contract(Openzeppelin's implementation) of $EDGEN token (only $EDGEN).
+On LayerEdge's L1, the staking token will be a WETH9 implementation, a wrapper of native token $EDGEN.
+
