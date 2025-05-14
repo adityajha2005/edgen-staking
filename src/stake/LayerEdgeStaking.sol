@@ -808,31 +808,17 @@ contract LayerEdgeStaking is
                 uint256 crossRank = new_t1 > old_t1
                     ? new_t1 // promotion: the one newly entering Tier1
                     : old_t1; // demotion: the one kicked out of Tier1
-                uint256 joinIdCross = stakerTree.findByCumulativeFrequency(crossRank);
-                address userCross = stakerAddress[joinIdCross];
-                uint256 rank = stakerTree.query(joinIdCross);
-                Tier toTier = _computeTierByRank(rank, n);
-                _recordTierChange(userCross, toTier);
+                _findAndRecordTierChange(crossRank, n);
             } 
             // Handle case where Tier 1 count stays the same
             else if (isRemoval && new_t1 > 0) {
                 // If a user was removed but tier 1 count didn't change
                 // We need to update the user at position new_t1 (someone from Tier 2 may need promotion)
-                uint256 joinIdCross = stakerTree.findByCumulativeFrequency(new_t1);
-                address userCross = stakerAddress[joinIdCross];
-                // Recalculate user's tier and record if needed
-                uint256 rank = stakerTree.query(joinIdCross);
-                Tier toTier = _computeTierByRank(rank, n);
-                _recordTierChange(userCross, toTier);
+                _findAndRecordTierChange(new_t1, n);
             }
             else if (!isRemoval) {
                 // If a user was added, the user at position old_t1 might have changed tiers
-                uint256 joinIdCross = stakerTree.findByCumulativeFrequency(old_t1);
-                address userCross = stakerAddress[joinIdCross];
-                // Recalculate user's tier and record if needed
-                uint256 rank = stakerTree.query(joinIdCross);
-                Tier toTier = _computeTierByRank(rank, n);
-                _recordTierChange(userCross, toTier);
+                _findAndRecordTierChange(old_t1, n);
             }
         }
 
@@ -848,37 +834,42 @@ contract LayerEdgeStaking is
                     // Demotion
                     crossRank = new_t1 + old_t2; // Add new_t1 count to land on correct index/rank
                 }
-                uint256 joinIdCross = stakerTree.findByCumulativeFrequency(crossRank);
-                address userCross = stakerAddress[joinIdCross];
-                uint256 rank = stakerTree.query(joinIdCross);
-                Tier toTier = _computeTierByRank(rank, n);
-                _recordTierChange(userCross, toTier);
+                _findAndRecordTierChange(crossRank, n);
             }
             // Handle case where Tier 2 count stays the same
             else if (isRemoval) {
                 // If a user was removed but tier 2 count didn't change
                 // We need to update the user at boundary between Tier 2 and Tier 3
                 uint256 crossRank = new_t1 + new_t2; // Boundary position
-                uint256 joinIdCross = stakerTree.findByCumulativeFrequency(crossRank);
-                address userCross = stakerAddress[joinIdCross];
-                // Recalculate user's tier and record if needed
-                uint256 rank = stakerTree.query(joinIdCross);
-                Tier toTier = _computeTierByRank(rank, n);
-                _recordTierChange(userCross, toTier);
+                _findAndRecordTierChange(crossRank, n);
             }
             else if (!isRemoval) {
                 // If a user was added, the user at old boundary between Tier 2 and Tier 3 might have changed
                 uint256 crossRank = old_t1 + old_t2; // Old boundary position
-                uint256 joinIdCross = stakerTree.findByCumulativeFrequency(crossRank);
-                address userCross = stakerAddress[joinIdCross];
-                // Recalculate user's tier and record if needed
-                uint256 rank = stakerTree.query(joinIdCross);
-                Tier toTier = _computeTierByRank(rank, n);
-                _recordTierChange(userCross, toTier);
+                _findAndRecordTierChange(crossRank, n);
             }
         }
     }
 
+    /**
+     * @notice Find the user at a given rank and record the tier change
+     * @param rank The rank of the user
+     * @param _stakerCountInTree The total number of stakers
+     */
+    function _findAndRecordTierChange(uint256 rank, uint256 _stakerCountInTree) internal {
+        uint256 joinIdCross = stakerTree.findByCumulativeFrequency(rank);
+        address userCross = stakerAddress[joinIdCross];
+        uint256 _rank = stakerTree.query(joinIdCross);
+        Tier toTier = _computeTierByRank(_rank, _stakerCountInTree);
+        _recordTierChange(userCross, toTier);
+    }
+
+    /**
+     * @notice Compute the tier for a user based on their rank and total stakers
+     * @param rank The rank of the user
+     * @param totalStakers The total number of stakers
+     * @return The tier of the user
+     */
     function _computeTierByRank(uint256 rank, uint256 totalStakers) internal pure returns (Tier) {
         if (rank == 0 || rank > totalStakers) return Tier.Tier3;
         (uint256 tier1Count, uint256 tier2Count,) = getTierCountForStakerCount(totalStakers);
