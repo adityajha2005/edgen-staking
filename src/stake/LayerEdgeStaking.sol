@@ -68,7 +68,7 @@ contract LayerEdgeStaking is
         uint256 totalClaimed; // Total interest claimed
         uint256 joinId; // Position in the stakers array (for tier calculation)
         uint256 lastTimeTierChanged;
-        bool hasUnstaked; // Whether user has ever unstaked (for permanent downgrade)
+        bool outOfTree; // Whether user is out of the tree
         bool isActive; // Whether user has any active stake
         bool isFirstDepositMoreThanMinStake; // Whether user's first deposit was more than min stake
     }
@@ -92,7 +92,8 @@ contract LayerEdgeStaking is
     mapping(uint256 => address) public stakerAddress;
     mapping(address => TierEvent[]) public stakerTierHistory;
     mapping(address => uint256) public totalStakersSnapshot;
-    uint256 public activeStakerCount;
+    uint256 public stakerCountInTree;
+    uint256 public stakerCountOutOfTree;
     uint256 public totalStaked;
     uint256 public rewardsReserve; // Tracking rewards available in the contract
     uint256 public nextJoinId;
@@ -202,7 +203,6 @@ contract LayerEdgeStaking is
         uint256 claimable = user.interestEarned;
 
         require(claimable > 0, "Nothing to compound");
-        require(!user.hasUnstaked && user.balance >= minStakeAmount, "Cannot compound after unstaking");
 
         // Check if we have enough rewards in the contract
         require(rewardsReserve >= claimable, "Insufficient rewards in contract");
@@ -342,7 +342,7 @@ contract LayerEdgeStaking is
         UserInfo memory user = users[userAddr];
 
         // If user has unstaked, permanently tier 3
-        if (user.hasUnstaked) {
+        if (user.outOfTree) {
             return Tier.Tier3;
         }
 
@@ -355,7 +355,7 @@ contract LayerEdgeStaking is
         uint256 rank = stakerTree.query(user.joinId);
 
         // Compute tier based on rank
-        return _computeTierByRank(rank, activeStakerCount);
+        return _computeTierByRank(rank, stakerCountInTree);
     }
 
     /**
@@ -460,7 +460,7 @@ contract LayerEdgeStaking is
      * @return tier3Count Number of tier 3 stakers
      */
     function getTierCounts() public view returns (uint256 tier1Count, uint256 tier2Count, uint256 tier3Count) {
-        return getTierCountForStakerCount(activeStakerCount);
+        return getTierCountForStakerCount(stakerCountInTree);
     }
 
     function getTierCountForStakerCount(uint256 stakerCount)
@@ -595,8 +595,30 @@ contract LayerEdgeStaking is
         return weightedSum / totalDuration;
     }
 
+    /**
+     * @notice Get the length of the tier history for a user
+     * @param user The address of the user
+     * @return The length of the tier history
+     */
     function stakerTierHistoryLength(address user) external view returns (uint256) {
         return stakerTierHistory[user].length;
+    }
+
+    /**
+     * @notice Get the length of the tier APY history for a tier
+     * @param tier The tier to get the length of the APY history for
+     * @return The length of the APY history
+     */
+    function getTierAPYHistoryLength(Tier tier) external view returns (uint256) {
+        return tierAPYHistory[tier].length;
+    }
+
+    /**
+     * @notice Get the total stakers count
+     * @return The total stakers count
+     */
+    function getTotalStakersCount() external view returns (uint256) {
+        return stakerCountInTree + stakerCountOutOfTree;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -608,9 +630,6 @@ contract LayerEdgeStaking is
 
         UserInfo storage user = users[userAddr];
 
-        // Check if user has unstaked before - permanent tier 3 downgrade
-        require(!user.hasUnstaked, "Cannot stake after unstaking");
-
         // Update interest before changing balance
         _updateInterest(userAddr);
 
@@ -621,13 +640,36 @@ contract LayerEdgeStaking is
             IWETH(address(stakingToken)).deposit{value: amount}();
         }
 
-        // If first time staking, register staker position
-        if (!user.isActive) {
+        Tier tier = Tier.Tier3;
+
+        //Staking for first time and amount is less than minStakeAmount, user will be in tier 3 permanently and out of the tree
+        if (!user.isActive && amount < minStakeAmount) {
+            stakerCountOutOfTree++;
+            user.isActive = true;
+            user.outOfTree = true;
+            _recordTierChange(userAddr, tier);
+        }
+
+        // If first time staking, register staker position whose stake is more than minStakeAmount
+        if (!user.isActive && amount >= minStakeAmount) {
             user.joinId = nextJoinId++;
             stakerTree.update(user.joinId, 1);
             stakerAddress[user.joinId] = userAddr;
             user.isActive = true;
-            activeStakerCount++;
+            stakerCountInTree++;
+
+            uint256 rank = stakerTree.query(user.joinId);
+            tier = _computeTierByRank(rank, stakerCountInTree);
+            user.isFirstDepositMoreThanMinStake = true;
+
+            _recordTierChange(userAddr, tier);
+
+            // Record any boundary crossings only if active staker count has changed
+            if (totalStakersSnapshot[userAddr] != stakerCountInTree) {
+                _checkBoundariesAndRecord(false);
+            }
+
+            totalStakersSnapshot[userAddr] = stakerCountInTree;
         }
 
         // Update user balances
@@ -637,28 +679,6 @@ contract LayerEdgeStaking is
 
         // Update total staked
         totalStaked += amount;
-
-        // Determine user's tier for event
-        uint256 rank = stakerTree.query(user.joinId);
-        Tier tier = Tier.Tier3;
-
-        if (user.balance >= minStakeAmount) {
-            tier = _computeTierByRank(rank, activeStakerCount);
-            user.isFirstDepositMoreThanMinStake = true;
-
-            _recordTierChange(userAddr, tier);
-
-            // Record any boundary crossings only if active staker count has changed
-            if (totalStakersSnapshot[userAddr] != activeStakerCount) {
-                _checkBoundariesAndRecord(false);
-            }
-
-            totalStakersSnapshot[userAddr] = activeStakerCount;
-        } else {
-            // Consider this operation as unstaking and keep the user in tier 3 permanently
-            // Don't have to checkBoundariesAndRecord because we the active staker counts remain the same
-            _handleStakeAmountLessThanThreshold(userAddr);
-        }
 
         emit Staked(userAddr, amount, tier);
     }
@@ -680,22 +700,22 @@ contract LayerEdgeStaking is
         // Update total staked
         totalStaked -= amount;
 
-        if (user.isActive && user.balance < minStakeAmount) {
+        if (!user.outOfTree && user.balance < minStakeAmount) {
             // execute this before removing from tree, this will make sure to calculate interest
             //for amount left after unstake
             _recordTierChange(userAddr, Tier.Tier3);
             stakerTree.update(user.joinId, -1);
-            user.isActive = false;
-            user.hasUnstaked = true;
-            activeStakerCount--;
-        }
+            stakerCountInTree--;
+            user.outOfTree = true;
+            stakerCountOutOfTree++;
 
-        // Record any boundary crossings only if active staker count has changed
-        if (totalStakersSnapshot[userAddr] != activeStakerCount) {
-            _checkBoundariesAndRecord(true);
-        }
+            // Record any boundary crossings only if active staker count has changed
+            if (totalStakersSnapshot[userAddr] != stakerCountInTree) {
+                _checkBoundariesAndRecord(true);
+            }
 
-        totalStakersSnapshot[userAddr] = activeStakerCount;
+            totalStakersSnapshot[userAddr] = stakerCountInTree;
+        }
 
         // Transfer tokens from contract to user
         if (!isNative) {
@@ -708,17 +728,6 @@ contract LayerEdgeStaking is
 
         emit TierDowngraded(userAddr);
         emit Unstaked(userAddr, amount);
-    }
-
-    function _handleStakeAmountLessThanThreshold(address userAddr) internal {
-        UserInfo storage user = users[userAddr];
-        // execute this before removing from tree, this will make sure to calculate interest
-        //for amount left after unstake
-        _recordTierChange(userAddr, Tier.Tier3);
-        stakerTree.update(user.joinId, -1);
-        user.isActive = false;
-        user.hasUnstaked = true;
-        activeStakerCount--;
     }
 
     function _claimInterest(address userAddr, bool isNative) internal {
@@ -763,10 +772,6 @@ contract LayerEdgeStaking is
         // Get current tier
         Tier old = getCurrentTier(user);
 
-        if (old == Tier.Tier3 && users[user].hasUnstaked) {
-            return;
-        }
-
         // If this is the same tier as before, no change to record
         if (
             stakerTierHistory[user].length > 0
@@ -783,7 +788,7 @@ contract LayerEdgeStaking is
 
     function _checkBoundariesAndRecord(bool isRemoval) internal {
         // recompute thresholds
-        uint256 n = activeStakerCount;
+        uint256 n = stakerCountInTree;
         uint256 oldN = isRemoval ? n + 1 : n - 1; // for removal we call after decrement; for add we call after increment
 
         // old thresholds (before this tx's change)

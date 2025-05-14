@@ -155,6 +155,8 @@ contract LayerEdgeStakingTest is Test {
 
         // Check Alice's initial tier (should be tier 1)
         assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier1));
+        (,,,,,,, bool outOfTree,,) = staking.users(alice);
+        assertFalse(outOfTree, "User should be in the tree");
 
         // Advance time past unstaking window
         vm.warp(block.timestamp + 7 days + 1);
@@ -165,11 +167,19 @@ contract LayerEdgeStakingTest is Test {
 
         // Check Alice's tier after unstaking (should be permanently tier 3)
         assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier3));
+        (,,,,,,, bool outOfTreeAfterUnstake,,) = staking.users(alice);
+        assertTrue(outOfTreeAfterUnstake, "User should be out of tree");
 
         // Alice tries to stake more to get back to tier 1
-        vm.prank(alice);
-        vm.expectRevert("Cannot stake after unstaking");
+        vm.startPrank(alice);
+        token.approve(address(staking), LARGE_STAKE);
         staking.stake(LARGE_STAKE);
+        vm.stopPrank();
+
+        // Check Alice's tier after staking (should be tier 3)
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier3));
+        (,,,,,,, bool outOfTreeAfterStake,,) = staking.users(alice);
+        assertTrue(outOfTreeAfterStake, "User should be out of tree");
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -365,22 +375,55 @@ contract LayerEdgeStakingTest is Test {
         // Advance time by 30 days to accrue rewards
         vm.warp(block.timestamp + 30 days);
 
-        // Alice unstakes partial amount after unstaking window
-        vm.warp(block.timestamp + 7 days);
+        //Assert interest accured for alice
+        (,,,, uint256 pendingRewardsBeforeUnstake) = staking.getUserInfo(alice);
+        assertEq(pendingRewardsBeforeUnstake, (MIN_STAKE * 50 * PRECISION * 30 days) / (365 days * PRECISION) / 100);
+
         vm.prank(alice);
         staking.unstake(MIN_STAKE / 2);
+
+        //Assert out or tree and tier 3
+        (,,,,,,, bool outOfTreeAfterUnstake,,) = staking.users(alice);
+        assertTrue(outOfTreeAfterUnstake);
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier3));
 
         // Advance time to accrue more rewards (now at tier 3)
         vm.warp(block.timestamp + 30 days);
 
-        // Try to compound rewards (should fail because user has unstaked)
+        //Assert interest accured for alice
+        (,,,, uint256 pendingRewardsAfterUnstake) = staking.getUserInfo(alice);
+        assertEq(
+            pendingRewardsAfterUnstake,
+            pendingRewardsBeforeUnstake + (MIN_STAKE / 2 * 20 * PRECISION * 30 days) / (365 days * PRECISION) / 100
+        );
+
         vm.prank(alice);
-        vm.expectRevert("Cannot compound after unstaking");
         staking.compoundInterest();
+
+        //Assert interest accured for alice
+        (uint256 newBalance,,,, uint256 pendingRewardsAfterCompound) = staking.getUserInfo(alice);
+        assertEq(pendingRewardsAfterCompound, 0);
+        assertEq(newBalance, MIN_STAKE / 2 + pendingRewardsAfterUnstake);
+
+        vm.warp(block.timestamp + 30 days);
+
+        //Assert interest accured for alice
+        (,,,, uint256 pendingRewardsAfterCompound2) = staking.getUserInfo(alice);
+        assertEq(
+            pendingRewardsAfterCompound2,
+            (MIN_STAKE / 2 + pendingRewardsAfterUnstake) * 20 * PRECISION * 30 days / (365 days * PRECISION) / 100
+        );
+
+        uint256 balanceBeforeClaim = token.balanceOf(alice);
 
         // Alice should still be able to claim rewards normally
         vm.prank(alice);
         staking.claimInterest();
+
+        //Assert interest accured for alice
+        (,,,, uint256 pendingRewardsAfterClaim) = staking.getUserInfo(alice);
+        assertEq(pendingRewardsAfterClaim, 0);
+        assertEq(token.balanceOf(alice), balanceBeforeClaim + pendingRewardsAfterCompound2);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -450,22 +493,33 @@ contract LayerEdgeStakingTest is Test {
         assertEq(finalBalance, 0);
 
         // Get user info directly from contract
-        (uint256 balance,,,,,,, bool hasUnstaked, bool isActive,) = staking.users(alice);
+        (uint256 balance,,,,,,, bool outOfTree, bool isActive,) = staking.users(alice);
 
         // Check user state
         assertEq(balance, 0);
-        assertTrue(hasUnstaked);
-        assertFalse(isActive);
+        assertTrue(outOfTree);
+        assertTrue(isActive); //User already participated and unstaked so this wallet will remain in Tier 3
 
         // Total staked should be 0
         assertEq(staking.totalStaked(), 0);
 
         // Active staker count should decrease
-        assertEq(staking.activeStakerCount(), 0);
+        assertEq(staking.stakerCountInTree(), 0);
+        assertEq(staking.stakerCountOutOfTree(), 1);
 
         // Check token balances
         assertEq(token.balanceOf(address(staking)), contractBalanceBefore - MIN_STAKE);
         assertEq(token.balanceOf(alice), aliceBalanceBefore + MIN_STAKE);
+
+        //Alice stakes again should be out of tree and in tier 3
+        vm.startPrank(alice);
+        token.approve(address(staking), MIN_STAKE);
+        staking.stake(MIN_STAKE);
+        vm.stopPrank();
+
+        (,,,,,,, bool outOfTreeAfterStake,,) = staking.users(alice);
+        assertTrue(outOfTreeAfterStake, "User should be out of tree");
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier3));
     }
 
     function test_LayerEdgeStaking_Unstake_BeforeUnstakingWindow() public {
@@ -541,7 +595,7 @@ contract LayerEdgeStakingTest is Test {
         assertEq(uint256(staking.getCurrentTier(bob)), uint256(LayerEdgeStaking.Tier.Tier3));
 
         // Active staker count should decrease
-        assertEq(staking.activeStakerCount(), 4);
+        assertEq(staking.stakerCountInTree(), 4);
 
         // Tiers should adjust:
         // - alice: still Tier 1
@@ -557,7 +611,7 @@ contract LayerEdgeStakingTest is Test {
         staking.unstake(MIN_STAKE / 2);
 
         // Active staker count should decrease
-        assertEq(staking.activeStakerCount(), 4);
+        assertEq(staking.stakerCountInTree(), 4);
 
         // Get tier counts
         (uint256 tier1Count, uint256 tier2Count, uint256 tier3Count) = staking.getTierCounts();
@@ -616,38 +670,6 @@ contract LayerEdgeStakingTest is Test {
 
         // Allow for minimal rounding errors
         assertApproxEqAbs(finalRewards, expectedTotalRewards, 2);
-    }
-
-    function test_LayerEdgeStaking_Unstake_NoMoreStaking() public {
-        // Alice stakes
-        dealToken(alice, MIN_STAKE);
-        vm.prank(alice);
-        staking.stake(MIN_STAKE);
-
-        // Advance time past unstaking window
-        vm.warp(block.timestamp + 7 days + 1);
-
-        // Alice unstakes a small amount
-        vm.prank(alice);
-        staking.unstake(1);
-
-        // Check that Alice is marked as having unstaked
-        (,,,,,,, bool hasUnstaked,,) = staking.users(alice);
-        assertTrue(hasUnstaked);
-
-        // Alice tries to stake more
-        vm.prank(alice);
-        vm.expectRevert("Cannot stake after unstaking");
-        staking.stake(MIN_STAKE);
-
-        // Advance time and try to stake again after some time (should still fail)
-        vm.warp(block.timestamp + 30 days);
-        vm.prank(alice);
-        vm.expectRevert("Cannot stake after unstaking");
-        staking.stake(LARGE_STAKE);
-
-        // Alice's tier should remain Tier 3 permanently
-        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier3));
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -1709,16 +1731,29 @@ contract LayerEdgeStakingTest is Test {
         assertEq(pendingRewards, (MIN_STAKE - 1) * 20 * PRECISION * 30 days / (365 days * PRECISION) / 100);
     }
 
-    function test_LayerEdgeStaking_ShouldRevertIfUserStakeAgainAfterStakingBelowMinimum() public {
+    function test_LayerEdgeStaking_ShouldRemainInTier3IfBelowMinimumStakeAfterStakingAgain() public {
         vm.startPrank(alice);
         token.approve(address(staking), MIN_STAKE - 1);
         staking.stake(MIN_STAKE - 1);
         vm.stopPrank();
 
+        vm.warp(block.timestamp + 30 days);
+
+        (,,,,,,, bool outOfTree,,) = staking.users(alice);
+        assertTrue(outOfTree, "User should be marked as out of tree");
+
+        (LayerEdgeStaking.Tier tier) = staking.getCurrentTier(alice);
+        assertEq(uint256(tier), uint256(LayerEdgeStaking.Tier.Tier3));
+
         vm.startPrank(alice);
-        vm.expectRevert("Cannot stake after unstaking");
-        staking.stake(MIN_STAKE);
+        token.approve(address(staking), MIN_STAKE * 4);
+        staking.stake(MIN_STAKE * 4);
         vm.stopPrank();
+
+        (LayerEdgeStaking.Tier tierAfterStake) = staking.getCurrentTier(alice);
+        assertEq(uint256(tierAfterStake), uint256(LayerEdgeStaking.Tier.Tier3));
+        (,,,,,,, bool outOfTreeAfterStake,,) = staking.users(alice);
+        assertTrue(outOfTreeAfterStake, "User should be out of tree");
     }
 
     function test_LayerEdgeStaking_SetMinStakeAmount_DoesNotAffectExistingStakers() public {
@@ -1834,7 +1869,7 @@ contract LayerEdgeStakingTest is Test {
         setupMultipleStakers(3); // Setup charlie, bob, and alice with MIN_STAKE each
 
         // Record initial state
-        uint256 initialActiveStakerCount = staking.activeStakerCount();
+        uint256 initialstakerCountInTree = staking.stakerCountInTree();
 
         // Setup users with larger stakes
         uint256 largeStake = MIN_STAKE * 4; // 4x minimum stake
@@ -1861,8 +1896,8 @@ contract LayerEdgeStakingTest is Test {
 
         // Check active staker count - should remain unchanged
         assertEq(
-            staking.activeStakerCount(),
-            initialActiveStakerCount + 2,
+            staking.stakerCountInTree(),
+            initialstakerCountInTree + 2,
             "Active staker count should not change after partial unstake"
         );
 
@@ -1883,8 +1918,8 @@ contract LayerEdgeStakingTest is Test {
 
         // Check active staker count - should still remain unchanged
         assertEq(
-            staking.activeStakerCount(),
-            initialActiveStakerCount + 2,
+            staking.stakerCountInTree(),
+            initialstakerCountInTree + 2,
             "Active staker count should not change after second partial unstake"
         );
         vm.stopPrank();
@@ -1906,8 +1941,8 @@ contract LayerEdgeStakingTest is Test {
 
         // Check active staker count - should remain unchanged
         assertEq(
-            staking.activeStakerCount(),
-            initialActiveStakerCount + 2,
+            staking.stakerCountInTree(),
+            initialstakerCountInTree + 2,
             "Active staker count should not change after partial unstake"
         );
 
@@ -1926,8 +1961,8 @@ contract LayerEdgeStakingTest is Test {
 
         // Check active staker count - should decrease by 1
         assertEq(
-            staking.activeStakerCount(),
-            initialActiveStakerCount + 1,
+            staking.stakerCountInTree(),
+            initialstakerCountInTree + 1,
             "Active staker count should decrease after unstaking below minimum"
         );
 
@@ -1935,9 +1970,8 @@ contract LayerEdgeStakingTest is Test {
         (,, uint256 eveTierAPY,,) = staking.getUserInfo(eve);
         assertEq(eveTierAPY, 20 * PRECISION, "User should be assigned Tier 3 APY after unstaking below minimum");
 
-        (,,,,,,, bool eveHasUnstaked, bool eveIsActive,) = staking.users(eve);
-        assertTrue(eveHasUnstaked, "User should be marked as having unstaked");
-        assertFalse(eveIsActive, "User should be marked as inactive after unstaking below minimum");
+        (,,,,,,, bool outOfTree,,) = staking.users(eve);
+        assertTrue(outOfTree, "User should be marked as out of tree after unstaking below minimum");
         vm.stopPrank();
     }
 
@@ -1957,7 +1991,7 @@ contract LayerEdgeStakingTest is Test {
         setupLargerStake(charlie, largeStake);
 
         // Record initial state
-        uint256 initialActiveStakerCount = staking.activeStakerCount();
+        uint256 initialstakerCountInTree = staking.stakerCountInTree();
 
         // Advance time past unstaking window
         vm.warp(block.timestamp + 7 days + 1);
@@ -1972,7 +2006,7 @@ contract LayerEdgeStakingTest is Test {
         (uint256 bobBalanceAfterUnstake1,,,,) = staking.getUserInfo(bob);
         assertEq(bobBalanceAfterUnstake1, largeStake - 1, "Balance should decrease by 1 wei");
         assertTrue(bobBalanceAfterUnstake1 > staking.minStakeAmount(), "Balance should remain above minimum stake");
-        assertEq(staking.activeStakerCount(), initialActiveStakerCount, "Active staker count should not change");
+        assertEq(staking.stakerCountInTree(), initialstakerCountInTree, "Active staker count should not change");
 
         // Second 1 wei unstake
         staking.unstake(1);
@@ -1981,7 +2015,7 @@ contract LayerEdgeStakingTest is Test {
         (uint256 bobBalanceAfterUnstake2,,,,) = staking.getUserInfo(bob);
         assertEq(bobBalanceAfterUnstake2, largeStake - 2, "Balance should decrease by another 1 wei");
         assertTrue(bobBalanceAfterUnstake2 > staking.minStakeAmount(), "Balance should remain above minimum stake");
-        assertEq(staking.activeStakerCount(), initialActiveStakerCount, "Active staker count should not change");
+        assertEq(staking.stakerCountInTree(), initialstakerCountInTree, "Active staker count should not change");
 
         // Third 1 wei unstake
         staking.unstake(1);
@@ -1990,7 +2024,7 @@ contract LayerEdgeStakingTest is Test {
         (uint256 bobBalanceAfterUnstake3,,,,) = staking.getUserInfo(bob);
         assertEq(bobBalanceAfterUnstake3, largeStake - 3, "Balance should decrease by another 1 wei");
         assertTrue(bobBalanceAfterUnstake3 > staking.minStakeAmount(), "Balance should remain above minimum stake");
-        assertEq(staking.activeStakerCount(), initialActiveStakerCount, "Active staker count should not change");
+        assertEq(staking.stakerCountInTree(), initialstakerCountInTree, "Active staker count should not change");
 
         vm.stopPrank();
 
@@ -2015,64 +2049,63 @@ contract LayerEdgeStakingTest is Test {
         assertEq(staking.totalStaked(), expectedTotalStaked, "Total staked amount should be correct");
     }
 
-    function test_LayerEdgeStaking_CompoundingRestrictions() public {
-        // Setup - initial stakes
-        uint256 largeStake = MIN_STAKE * 4;
-        setupLargerStake(alice, largeStake); // For testing hasUnstaked restriction
-        setupLargerStake(bob, MIN_STAKE / 2); // For testing below minStake restriction
-
-        // Advance time to accrue interest
-        vm.warp(block.timestamp + 30 days);
-
-        // Test case 1: User who has unstaked cannot compound
+    function test_LayerEdgeStaking_StakeAndUnstakeVariations() public {
+        // Alice stakes
         vm.startPrank(alice);
-
-        // Unstake a small amount to mark as hasUnstaked
-        vm.warp(block.timestamp + 7 days + 1); // Past unstaking window
-        staking.unstake(MIN_STAKE * 4);
-
-        // Verify user has unstaked flag
-        (uint256 aliceBalance,,,,,,, bool aliceHasUnstaked,,) = staking.users(alice);
-        assertEq(aliceBalance, largeStake - MIN_STAKE * 4, "Alice's balance should decrease by unstake amount");
-
-        assertTrue(aliceHasUnstaked, "Alice should be marked as having unstaked");
-
-        // Alice tries to compound - should fail
-        vm.expectRevert("Cannot compound after unstaking");
-        staking.compoundInterest();
-
+        token.approve(address(staking), MIN_STAKE);
+        staking.stake(MIN_STAKE);
         vm.stopPrank();
 
-        // Test case 2: User with balance < minStake cannot compound
-        vm.startPrank(bob);
+        // Assert in tree
+        (,,,,,,, bool outOfTree,,) = staking.users(alice);
+        assertFalse(outOfTree, "Alice should be in the tree");
+        // Assert tier is tier 1
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier1));
+        //Assert stakers count is 1
+        assertEq(staking.stakerCountInTree(), 1);
 
-        // Verify Bob's balance is below minStake
-        (uint256 bobBalance,,,,) = staking.getUserInfo(bob);
-        assertTrue(bobBalance < staking.minStakeAmount(), "Bob's balance should be below minimum stake");
-
-        // Bob tries to compound - should fail
-        vm.expectRevert("Cannot compound after unstaking");
-        staking.compoundInterest();
-
+        // Alice stakes again
+        vm.startPrank(alice);
+        token.approve(address(staking), MIN_STAKE);
+        staking.stake(MIN_STAKE);
         vm.stopPrank();
 
-        // Test case 3: User that has unstaked AND has balance < minStake
-        vm.startPrank(bob);
+        // Assert in tree
+        (,,,,,,, outOfTree,,) = staking.users(alice);
+        assertFalse(outOfTree, "Alice should be in the tree");
+        // Assert tier is tier 1
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier1));
+        //Assert stakers count is 1
+        assertEq(staking.stakerCountInTree(), 1);
 
-        // Bob unstakes a small amount to also set hasUnstaked flag
-        vm.warp(block.timestamp + 7 days + 1); // Past unstaking window
-        staking.unstake(100);
-
-        // Verify Bob has both conditions
-        (uint256 newBobBalance,,,,,,, bool newBobHasUnstaked,,) = staking.users(bob);
-        assertEq(newBobBalance, bobBalance - 100, "Bob's balance should decrease by 100");
-        assertTrue(newBobBalance < staking.minStakeAmount(), "Bob's balance should be below minimum stake");
-        assertTrue(newBobHasUnstaked, "Bob should be marked as having unstaked");
-
-        // Bob tries to compound - should fail (same error message)
-        vm.expectRevert("Cannot compound after unstaking");
-        staking.compoundInterest();
-
+        vm.warp(block.timestamp + 7 days + 1);
+        // Alice unstakes
+        vm.startPrank(alice);
+        staking.unstake(MIN_STAKE + 1);
         vm.stopPrank();
+
+        // Assert out of tree
+        (,,,,,,, outOfTree,,) = staking.users(alice);
+        assertTrue(outOfTree, "Alice should be out of tree");
+        // Assert tier is tier 3
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier3));
+        //Assert stakers count is 0
+        assertEq(staking.stakerCountInTree(), 0);
+        assertEq(staking.stakerCountOutOfTree(), 1);
+
+        // Alice stakes again
+        vm.startPrank(alice);
+        token.approve(address(staking), MIN_STAKE);
+        staking.stake(MIN_STAKE);
+        vm.stopPrank();
+
+        // Assert out of tree
+        (,,,,,,, outOfTree,,) = staking.users(alice);
+        assertTrue(outOfTree, "Alice should be out of tree");
+        // Assert tier is tier 3
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier3));
+        //Assert stakers count is 0
+        assertEq(staking.stakerCountInTree(), 0);
+        assertEq(staking.stakerCountOutOfTree(), 1);
     }
 }
