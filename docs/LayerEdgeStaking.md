@@ -202,6 +202,7 @@ When a user joins or leaves, the contract:
 Note: When a user joins or leaves the system, at most two people's tier will be changed and the method `_checkBoundariesAndRecord` will find exactly whose tier is going to change and record them.
 
 ### Key points to note
+- Any user who stakes more than `minStakeAmount` will be add to the tree/tier system. They might get promoted/demoted based on FCFS condition as mentioned above.
 - Any user who stakes less than `minStakeAmount` will be in Tier3 permanently and out of the tree/tier system(won't get promoted) even if they stake more later.
 - Any user who unstakes and the balance went less than `minStakeAmount` they will also be moved out of the tree/tier system and will be in Tier 3 permanently.
 - Any users who is out of the tree/system can stake more at any time but will only be earning interest at Tier3 apy.
