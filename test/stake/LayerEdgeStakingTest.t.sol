@@ -2108,4 +2108,234 @@ contract LayerEdgeStakingTest is Test {
         assertEq(staking.stakerCountInTree(), 0);
         assertEq(staking.stakerCountOutOfTree(), 1);
     }
+    
+    function test_LayerEdgeStaking_TierPromotionDemotion() public {
+        // This test will verify the behavior of tier promotions and demotions
+        // according to the audit finding
+
+        console2.log('alice', address(alice));
+        console2.log('bob', address(bob));
+        console2.log('charlie', address(charlie));
+        console2.log('david', address(david));
+        console2.log('eve', address(eve));
+        console2.log('frank', address(frank));
+        console2.log('grace', address(grace));
+        
+        // 1. Setup 6 stakers to create specific tier distribution (1 in Tier1, 1 in Tier2, 4 in Tier3)
+        setupMultipleStakers(6);
+
+        
+        // Verify initial tier distribution
+        (uint256 tier1Count, uint256 tier2Count, uint256 tier3Count) = staking.getTierCounts();
+        assertEq(tier1Count, 1, "Should have 1 staker in Tier1");
+        assertEq(tier2Count, 1, "Should have 1 staker in Tier2");
+        assertEq(tier3Count, 4, "Should have 4 stakers in Tier3");
+        
+        // Check tiers of each user
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier1), "Alice should be in Tier1");
+        assertEq(uint256(staking.getCurrentTier(bob)), uint256(LayerEdgeStaking.Tier.Tier2), "Bob should be in Tier2");
+        assertEq(uint256(staking.getCurrentTier(charlie)), uint256(LayerEdgeStaking.Tier.Tier3), "Charlie should be in Tier3");
+        
+        // Advance time to accumulate some interest at initial tiers
+        vm.warp(block.timestamp + 30 days);
+        
+        // Check Charlie's interest accrual at Tier3
+        (,,,, uint256 charlieInterestBeforePromotion) = staking.getUserInfo(charlie);
+        uint256 expectedTier3Interest = (MIN_STAKE * 20 * PRECISION * 30 days) / (365 days * PRECISION) / 100;
+        assertApproxEqAbs(charlieInterestBeforePromotion, expectedTier3Interest, 2, "Charlie should have accrued Tier3 interest");
+        
+        // 2. Add one more staker (Grace) to test promotion
+        // According to the audit, this should trigger a promotion from Tier3 to Tier2
+        vm.startPrank(grace);
+        token.approve(address(staking), MIN_STAKE);
+        staking.stake(MIN_STAKE);
+        vm.stopPrank();
+        
+        // Verify updated tier distribution - should now be 1 in Tier1, 2 in Tier2, 4 in Tier3
+        (tier1Count, tier2Count, tier3Count) = staking.getTierCounts();
+        assertEq(tier1Count, 1, "Should have 1 staker in Tier1");
+        assertEq(tier2Count, 2, "Should have 2 stakers in Tier2");
+        assertEq(tier3Count, 4, "Should have 4 stakers in Tier3");
+        
+        //Get staker tier history of bob and charlie
+        uint256 bobTierHistoryLength = staking.stakerTierHistoryLength(bob);
+        uint256 charlieTierHistoryLength = staking.stakerTierHistoryLength(charlie);
+        console2.log("bobTierHistoryLength", bobTierHistoryLength);
+        console2.log("charlieTierHistoryLength", charlieTierHistoryLength);
+        
+        for(uint256 i = 0; i < bobTierHistoryLength; i++) {
+            (LayerEdgeStaking.Tier from, LayerEdgeStaking.Tier to, uint256 timestamp) = staking.stakerTierHistory(bob, i);
+            console2.log("bobTierHistory", uint256(from), uint256(to), timestamp);
+        }
+        
+        for(uint256 i = 0; i < charlieTierHistoryLength; i++) {
+            (LayerEdgeStaking.Tier from, LayerEdgeStaking.Tier to, uint256 timestamp) = staking.stakerTierHistory(charlie, i);
+            console2.log("charlieTierHistory", uint256(from), uint256(to), timestamp);
+        }
+        
+        // Check if Charlie was promoted to Tier2 (should be first in Tier3 previously)
+        // The audit suggests this might not happen correctly, so we're verifying
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier1), "Alice should remain in Tier1");
+        assertEq(uint256(staking.getCurrentTier(bob)), uint256(LayerEdgeStaking.Tier.Tier2), "Bob should remain in Tier2");
+        assertEq(uint256(staking.getCurrentTier(charlie)), uint256(LayerEdgeStaking.Tier.Tier2), "Charlie should be promoted to Tier2");
+        
+        vm.warp(block.timestamp + 30 days);
+        
+        // Check Charlie's interest accrual after promotion to Tier2
+        (,,,, uint256 charlieInterestAfterPromotion) = staking.getUserInfo(charlie);
+        
+        // Expected interest should include:
+        // 1. Interest already earned at Tier3 (charlieInterestBeforePromotion)
+        // 2. New interest earned at Tier2 rate (35%)
+        uint256 expectedTier2Interest = (MIN_STAKE * 35 * PRECISION * 30 days) / (365 days * PRECISION) / 100;
+        uint256 expectedTotalInterest = charlieInterestBeforePromotion + expectedTier2Interest;
+        
+        assertApproxEqAbs(
+            charlieInterestAfterPromotion, 
+            expectedTotalInterest, 
+            2, 
+            "Charlie should have accrued additional interest at Tier2 rate"
+        );
+    }
+    
+    function test_LayerEdgeStaking_TierReassignmentOnRemoval() public {
+        // This test specifically checks the issue mentioned in the audit report:
+        // "For example, suppose there are currently 7 activeStakers: 1 in Tier1, 2 in Tier2, and 4 in Tier3.
+        // After removing one user, there will be 1 Tier1, 1 Tier2 and 4 Tier3."
+        
+        // Setup 7 stakers to create the specific distribution mentioned in the audit
+        setupMultipleStakers(7);
+        
+        // Verify initial tier distribution
+        (uint256 tier1Count, uint256 tier2Count, uint256 tier3Count) = staking.getTierCounts();
+        
+        // Expected distribution with 7 stakers:
+        // Tier1: 20% of 7 = 1.4 => 1 staker (floored)
+        // Tier2: 30% of 7 = 2.1 => 2 stakers (floored) 
+        // Tier3: Remaining 4 stakers
+        assertEq(tier1Count, 1, "Should have 1 staker in Tier1");
+        assertEq(tier2Count, 2, "Should have 2 stakers in Tier2");
+        assertEq(tier3Count, 4, "Should have 4 stakers in Tier3");
+        
+        // Verify initial tier assignments
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier1), "Alice should be in Tier1");
+        assertEq(uint256(staking.getCurrentTier(bob)), uint256(LayerEdgeStaking.Tier.Tier2), "Bob should be in Tier2");
+        assertEq(uint256(staking.getCurrentTier(charlie)), uint256(LayerEdgeStaking.Tier.Tier2), "Charlie should be in Tier2");
+        assertEq(uint256(staking.getCurrentTier(david)), uint256(LayerEdgeStaking.Tier.Tier3), "David should be in Tier3");
+        
+        console2.log("--- Initial Tier Distribution ---");
+        console2.log("Alice (first staker):", uint256(staking.getCurrentTier(alice)));
+        console2.log("Bob (second staker):", uint256(staking.getCurrentTier(bob)));
+        console2.log("Charlie (third staker):", uint256(staking.getCurrentTier(charlie)));
+        console2.log("David (fourth staker):", uint256(staking.getCurrentTier(david)));
+        console2.log("Eve (fifth staker):", uint256(staking.getCurrentTier(eve)));
+        console2.log("Frank (sixth staker):", uint256(staking.getCurrentTier(frank)));
+        console2.log("Grace (seventh staker):", uint256(staking.getCurrentTier(grace)));
+        
+        // Get tier history lengths before removals
+        uint256 bobTierHistoryLengthBefore = staking.stakerTierHistoryLength(bob);
+        uint256 charlieTierHistoryLengthBefore = staking.stakerTierHistoryLength(charlie);
+        
+        // Advance time past unstaking window
+        vm.warp(block.timestamp + 7 days + 1);
+        
+        // CASE 1: Remove Alice (Tier1 user)
+        // According to the audit report, the correct behavior should be:
+        // "If the user in Tier1 was removed, then the first user in Tier2 should be moved to Tier1."
+        vm.startPrank(alice);
+        staking.unstake(MIN_STAKE);
+        vm.stopPrank();
+        
+        // After Alice is removed, we should see:
+        // 1. Bob (originally first in Tier2) should move to Tier1
+        // 2. Charlie should remain in Tier2
+        // 3. No changes to Tier3 users
+        
+        console2.log("--- After Alice Removal ---");
+        console2.log("Bob:", uint256(staking.getCurrentTier(bob)));
+        console2.log("Charlie:", uint256(staking.getCurrentTier(charlie)));
+        console2.log("David:", uint256(staking.getCurrentTier(david)));
+        
+        assertEq(uint256(staking.getCurrentTier(bob)), uint256(LayerEdgeStaking.Tier.Tier1), 
+            "Bob should be promoted to Tier1 when Alice leaves");
+        assertEq(uint256(staking.getCurrentTier(charlie)), uint256(LayerEdgeStaking.Tier.Tier2), 
+            "Charlie should remain in Tier2");
+        
+        // Verify Bob's tier history was updated
+        uint256 bobTierHistoryLengthAfter = staking.stakerTierHistoryLength(bob);
+        assertTrue(bobTierHistoryLengthAfter > bobTierHistoryLengthBefore, 
+            "Bob's tier history should be updated after Alice's removal");
+        
+        if (bobTierHistoryLengthAfter > 0) {
+            (LayerEdgeStaking.Tier fromTier, LayerEdgeStaking.Tier toTier, ) = 
+                staking.stakerTierHistory(bob, bobTierHistoryLengthAfter - 1);
+            
+            assertEq(uint256(fromTier), uint256(LayerEdgeStaking.Tier.Tier2), 
+                "Bob's recorded tier change should be from Tier2");
+            assertEq(uint256(toTier), uint256(LayerEdgeStaking.Tier.Tier1), 
+                "Bob's recorded tier change should be to Tier1");
+        }
+        
+        // Reset the test to re-check with a fresh set of stakers
+        vm.warp(0);
+        vm.roll(0);
+        setUp();
+        setupMultipleStakers(7);
+        
+        // Verify initial tier distribution again
+        (tier1Count, tier2Count, tier3Count) = staking.getTierCounts();
+        assertEq(tier1Count, 1, "Should have 1 staker in Tier1");
+        assertEq(tier2Count, 2, "Should have 2 stakers in Tier2");
+        assertEq(tier3Count, 4, "Should have 4 stakers in Tier3");
+        
+        // CASE 2: Remove Bob (first user in Tier2)
+        // According to the audit report:
+        // "If the first user in Tier2 was removed, then no users need to be moved."
+        
+        // Get Charlie's tier history length before Bob's removal
+        charlieTierHistoryLengthBefore = staking.stakerTierHistoryLength(charlie);
+        
+        // Advance time past unstaking window
+        vm.warp(block.timestamp + 7 days + 1);
+        
+        // Bob unstakes
+        vm.startPrank(bob);
+        staking.unstake(MIN_STAKE);
+        vm.stopPrank();
+        
+        console2.log("--- After Bob Removal ---");
+        console2.log("Alice:", uint256(staking.getCurrentTier(alice)));
+        console2.log("Charlie:", uint256(staking.getCurrentTier(charlie)));
+        console2.log("David:", uint256(staking.getCurrentTier(david)));
+        
+        // After Bob is removed, we should see:
+        // 1. Alice should remain in Tier1
+        // 2. Charlie should remain in Tier2 as the only Tier2 user
+        // 3. No other tier changes
+        
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier1), 
+            "Alice should remain in Tier1");
+        assertEq(uint256(staking.getCurrentTier(charlie)), uint256(LayerEdgeStaking.Tier.Tier2), 
+            "Charlie should remain the only Tier2 user");
+        
+        // Charlie's tier history should not change according to the audit report's expected behavior
+        uint256 charlieTierHistoryLengthAfter = staking.stakerTierHistoryLength(charlie);
+        
+        // The audit report suggests that the bug would cause Charlie to be incorrectly demoted
+        // So we're checking if Charlie's tier history shows any tier changes it shouldn't have
+        if (charlieTierHistoryLengthAfter > charlieTierHistoryLengthBefore) {
+            console2.log("Charlie tier history changed when it shouldn't have!");
+            for(uint256 i = charlieTierHistoryLengthBefore; i < charlieTierHistoryLengthAfter; i++) {
+                (LayerEdgeStaking.Tier from, LayerEdgeStaking.Tier to, uint256 timestamp) = 
+                    staking.stakerTierHistory(charlie, i);
+                console2.log("charlieTierHistory", uint256(from), uint256(to), timestamp);
+            }
+        }
+        
+        // Check tier counts after Bob's removal
+        (tier1Count, tier2Count, tier3Count) = staking.getTierCounts();
+        assertEq(tier1Count, 1, "Should still have 1 staker in Tier1");
+        assertEq(tier2Count, 1, "Should now have 1 staker in Tier2");
+        assertEq(tier3Count, 4, "Should still have 4 stakers in Tier3");
+    }
 }

@@ -319,21 +319,49 @@ contract TierBoundaryAndInterestTest is Test {
         vm.prank(eve);
         staking.stake(MIN_STAKE);
 
+        //Assert eve record history
+        LayerEdgeStaking.TierEvent[] memory eveHistory = getTierHistory(eve);
+        assertEq(eveHistory.length, 1);
+        assertEq(uint256(eveHistory[0].to), uint256(LayerEdgeStaking.Tier.Tier3));
+
         vm.prank(frank);
         staking.stake(MIN_STAKE);
+
+        //Assert eve record history
+        eveHistory = getTierHistory(eve);
+        console2.log("eveHistory.length", eveHistory.length);
+        console2.log('eves tier', uint256(staking.getCurrentTier(eve)));
 
         vm.prank(grace);
         staking.stake(MIN_STAKE);
 
+        //Assert eve record history
+        eveHistory = getTierHistory(eve);
+        console2.log("eveHistory.length", eveHistory.length);
+        console2.log('eves tier', uint256(staking.getCurrentTier(eve)));
+
         vm.prank(heidi);
         staking.stake(MIN_STAKE);
 
+        //Assert eve record history
+        eveHistory = getTierHistory(eve);
+        console2.log("eveHistory.length", eveHistory.length);
+        console2.log('eves tier', uint256(staking.getCurrentTier(eve)));
         vm.prank(ivan);
         staking.stake(MIN_STAKE);
+
+        //Assert eve record history
+        eveHistory = getTierHistory(eve);
+        console2.log("eveHistory.length", eveHistory.length);
+        console2.log('eves tier', uint256(staking.getCurrentTier(eve)));
 
         vm.prank(judy);
         staking.stake(MIN_STAKE);
 
+        //Assert eve record history
+        eveHistory = getTierHistory(eve);
+        console2.log("eveHistory.length", eveHistory.length);
+        console2.log('eves tier', uint256(staking.getCurrentTier(eve)));
         // Initial distribution should be:
         // Tier 1: Alice, Bob (first 2)
         // Tier 2: Charlie, Dave, Eve (next 3)
@@ -351,6 +379,20 @@ contract TierBoundaryAndInterestTest is Test {
         vm.prank(bob);
         staking.unstake(MIN_STAKE);
 
+        //Assert bob out of tree
+        (,,,,,,, bool outOfTree,,) = staking.users(bob);
+        assertEq(outOfTree, true);
+        console2.log('bob out of tree', outOfTree);
+
+        //Assert eve record history
+        console2.log('after bob unstake.............');
+        eveHistory = getTierHistory(eve);
+        console2.log("eveHistory.length", eveHistory.length);
+        console2.log('eves tier', uint256(staking.getCurrentTier(eve)));
+        console2.log('eves address', eve);
+        console2.log('daves address', dave);
+        console2.log('franks address', frank);
+
         // Verify tier changes
         assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier1));
         assertEq(uint256(staking.getCurrentTier(charlie)), uint256(LayerEdgeStaking.Tier.Tier2)); // Charlie moved up to tier 1
@@ -364,10 +406,13 @@ contract TierBoundaryAndInterestTest is Test {
         assertEq(bobBalance, 0);
 
         // Check tier history for Eve
-        LayerEdgeStaking.TierEvent[] memory eveHistory = getTierHistory(eve);
-        assertEq(eveHistory.length, 1);
+        eveHistory = getTierHistory(eve);
+        assertEq(eveHistory.length, 3, "Length should be 3");
+        console2.log("eveHistory[0].to", uint256(eveHistory[0].to));
+        console2.log("eveHistory[1].to", uint256(eveHistory[1].to));
         assertEq(uint256(eveHistory[0].to), uint256(LayerEdgeStaking.Tier.Tier3)); // Initial tier
-            // assertEq(uint256(eveHistory[1].to), uint256(LayerEdgeStaking.Tier.Tier3)); // Demoted tier
+        assertEq(uint256(eveHistory[1].to), uint256(LayerEdgeStaking.Tier.Tier2)); // Demoted tier
+        assertEq(uint256(eveHistory[2].to), uint256(LayerEdgeStaking.Tier.Tier3)); // Promoted tier
     }
 
     // Test multiple boundary shifts with interest calculation

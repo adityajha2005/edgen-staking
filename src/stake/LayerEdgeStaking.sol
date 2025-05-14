@@ -9,6 +9,7 @@ import {FenwickTree} from "@src/library/FenwickTree.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {IWETH} from "@interfaces/IWETH.sol";
+import {console2} from "forge-std/console2.sol";
 
 /**
  * @title LayerEdgeStaking
@@ -621,6 +622,10 @@ contract LayerEdgeStaking is
         return stakerCountInTree + stakerCountOutOfTree;
     }
 
+    function getCumulativeFrequency(uint256 rank) external view returns (uint256) {
+        return stakerTree.findByCumulativeFrequency(rank);
+    }
+
     /*//////////////////////////////////////////////////////////////
                         INTERNAL FUNCTIONS
     //////////////////////////////////////////////////////////////*/
@@ -701,6 +706,7 @@ contract LayerEdgeStaking is
         totalStaked -= amount;
 
         if (!user.outOfTree && user.balance < minStakeAmount) {
+            console2.log('unstake');
             // execute this before removing from tree, this will make sure to calculate interest
             //for amount left after unstake
             _recordTierChange(userAddr, Tier.Tier3);
@@ -709,8 +715,13 @@ contract LayerEdgeStaking is
             user.outOfTree = true;
             stakerCountOutOfTree++;
 
+            console2.log('stakerCountInTree', stakerCountInTree);
+            console2.log('stakerCountOutOfTree', stakerCountOutOfTree);
+            console2.log('totalStakersSnapshot[userAddr]', totalStakersSnapshot[userAddr]);
+
             // Record any boundary crossings only if active staker count has changed
             if (totalStakersSnapshot[userAddr] != stakerCountInTree) {
+                console2.log('is this being called?');
                 _checkBoundariesAndRecord(true);
             }
 
@@ -805,16 +816,37 @@ contract LayerEdgeStaking is
                 : old_t1; // demotion: the one kicked out of Tier1
             uint256 joinIdCross = stakerTree.findByCumulativeFrequency(crossRank);
             address userCross = stakerAddress[joinIdCross];
-            Tier toTier = _computeTierByRank(joinIdCross, n);
+            uint256 rank = stakerTree.query(joinIdCross);
+            Tier toTier = _computeTierByRank(rank, n);
             _recordTierChange(userCross, toTier);
         }
 
         if (new_t2 != old_t2) {
             // Tier2↔Tier3 boundary
-            uint256 crossRank = new_t2 > old_t2 ? new_t2 : old_t2;
+            console2.log('tier2 to tier3 boundary');
+            console2.log('new_t2', new_t2);
+            console2.log('old_t2', old_t2);
+            console2.log('new_t1', new_t1);
+            console2.log('old_t1', old_t1);
+            uint256 crossRank;
+            if (new_t2 > old_t2) {
+                // Promotion
+                console2.log('promotion');
+                crossRank = new_t2 + new_t1; //Add new_t1 count to land on correct index/rank
+            } else {
+                // Demotion
+                console2.log('demotion');
+                crossRank = old_t2 + new_t1; //Add new_t1 count to land on correct index/rank
+            }
+            console2.log('crossRank', crossRank);
             uint256 joinIdCross = stakerTree.findByCumulativeFrequency(crossRank);
             address userCross = stakerAddress[joinIdCross];
-            Tier toTier = _computeTierByRank(joinIdCross, n);
+            uint256 rank = stakerTree.query(joinIdCross);
+            console2.log('joinIdCross', joinIdCross);
+            console2.log('userCross', userCross);
+            console2.log('rank', rank);
+            Tier toTier = _computeTierByRank(rank, n);
+            console2.log('toTier', uint256(toTier));
             _recordTierChange(userCross, toTier);
         }
     }
