@@ -1382,6 +1382,9 @@ contract TierBoundaryAndInterestTest is Test {
         LayerEdgeStaking.TierEvent[] memory eveHistory = getTierHistory(eve);
         assertTrue(bobHistory.length >= 2, "Bob should have a promotion event");
         assertTrue(daveHistory.length >= 2, "Dave should have a promotion event");
+        for (uint256 i = 0; i < daveHistory.length; i++) {
+            console2.log("daveHistory[i].to", i, uint256(daveHistory[i].to));
+        }
         assertTrue(eveHistory.length >= 2, "Eve should have a promotion event");
     }
 
