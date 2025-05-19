@@ -451,7 +451,7 @@ contract LayerEdgeStakingTest is Test {
         // Alice unstakes half
         vm.startPrank(alice);
         vm.expectEmit(true, false, false, false);
-        emit LayerEdgeStaking.TierDowngraded(alice);
+        emit LayerEdgeStaking.TierChanged(alice, LayerEdgeStaking.Tier.Tier3);
         vm.expectEmit(true, false, false, false);
         emit LayerEdgeStaking.Unstaked(alice, MIN_STAKE / 2);
         staking.unstake(MIN_STAKE / 2);

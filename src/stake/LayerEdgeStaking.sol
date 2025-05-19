@@ -54,7 +54,7 @@ contract LayerEdgeStaking is
     event Staked(address indexed user, uint256 amount, Tier tier);
     event Unstaked(address indexed user, uint256 amount);
     event RewardClaimed(address indexed user, uint256 amount);
-    event TierDowngraded(address indexed user);
+    event TierChanged(address indexed user, Tier to);
     event APYUpdated(Tier indexed tier, uint256 rate, uint256 timestamp);
     event RewardsDeposited(address indexed sender, uint256 amount);
 
@@ -759,7 +759,6 @@ contract LayerEdgeStaking is
             require(success, "Unstake native transfer failed");
         }
 
-        emit TierDowngraded(userAddr);
         emit Unstaked(userAddr, amount);
     }
 
@@ -815,69 +814,73 @@ contract LayerEdgeStaking is
                 && stakerTierHistory[user][stakerTierHistory[user].length - 1].to == newTier
         ) return;
 
-        uint256 nowTs = block.timestamp;
+        uint256 currentTime = block.timestamp;
 
         //push event - ensure neither from nor to is Tier.None
-        stakerTierHistory[user].push(TierEvent({from: old, to: newTier, timestamp: nowTs}));
+        stakerTierHistory[user].push(TierEvent({from: old, to: newTier, timestamp: currentTime}));
 
-        users[user].lastTimeTierChanged = nowTs;
+        users[user].lastTimeTierChanged = currentTime;
+
+        emit TierChanged(user, newTier);
     }
 
     function _checkBoundariesAndRecord(bool isRemoval) internal {
         // recompute thresholds
         uint256 n = stakerCountInTree;
-        uint256 oldN = isRemoval ? n + 1 : n - 1; // for removal we call after decrement; for add we call after increment
+        uint256 oldN = isRemoval ? n + 1 : n - 1;
 
-        // old thresholds (before this tx's change)
+        // old and new thresholds
         (uint256 old_t1, uint256 old_t2,) = getTierCountForStakerCount(oldN);
-        // new thresholds
         (uint256 new_t1, uint256 new_t2,) = getTierCountForStakerCount(n);
 
         // Tier 1 boundary handling
         if (new_t1 != 0) {
             if (new_t1 != old_t1) {
-                // Tier boundary change - handle as before
-                uint256 crossRank = new_t1 > old_t1
-                    ? new_t1 // promotion: the one newly entering Tier1
-                    : old_t1; // demotion: the one kicked out of Tier1
-                _findAndRecordTierChange(crossRank, n);
+                // Need to update all users between the old and new boundaries
+                if (new_t1 > old_t1) {
+                    // Promotion case: update all users from old_t1+1 to new_t1
+                    for (uint256 rank = old_t1 + 1; rank <= new_t1; rank++) {
+                        _findAndRecordTierChange(rank, n);
+                    }
+                } else {
+                    // Demotion case: update all users from new_t1+1 to old_t1
+                    for (uint256 rank = new_t1 + 1; rank <= old_t1; rank++) {
+                        _findAndRecordTierChange(rank, n);
+                    }
+                }
             }
             // Handle case where Tier 1 count stays the same
             else if (isRemoval && new_t1 > 0) {
-                // If a user was removed but tier 1 count didn't change
-                // We need to update the user at position new_t1 (someone from Tier 2 may need promotion)
                 _findAndRecordTierChange(new_t1, n);
             } else if (!isRemoval) {
-                // If a user was added, the user at position old_t1 might have changed tiers
                 _findAndRecordTierChange(old_t1, n);
             }
         }
 
         // Tier 2 boundary handling
         if (new_t1 + new_t2 > 0) {
-            // Ensure there are stakers in Tier 1 or Tier 2
             if (new_t2 != old_t2) {
-                // Tier 2 boundary changed - handle as before
-                uint256 crossRank;
-                if (new_t2 > old_t2) {
-                    // Promotion
-                    crossRank = new_t1 + new_t2; // Add new_t1 count to land on correct index/rank
+                // Need to update all users between the old and new tier 2 boundaries
+                uint256 old_boundary = old_t1 + old_t2;
+                uint256 new_boundary = new_t1 + new_t2;
+                
+                if (new_boundary > old_boundary) {
+                    // Promotion case: update all users from old_boundary+1 to new_boundary
+                    for (uint256 rank = old_boundary + 1; rank <= new_boundary; rank++) {
+                        _findAndRecordTierChange(rank, n);
+                    }
                 } else {
-                    // Demotion
-                    crossRank = new_t1 + old_t2; // Add new_t1 count to land on correct index/rank
+                    // Demotion case: update all users from new_boundary+1 to old_boundary
+                    for (uint256 rank = new_boundary + 1; rank <= old_boundary; rank++) {
+                        _findAndRecordTierChange(rank, n);
+                    }
                 }
-                _findAndRecordTierChange(crossRank, n);
             }
             // Handle case where Tier 2 count stays the same
             else if (isRemoval) {
-                // If a user was removed but tier 2 count didn't change
-                // We need to update the user at boundary between Tier 2 and Tier 3
-                uint256 crossRank = new_t1 + new_t2; // Boundary position
-                _findAndRecordTierChange(crossRank, n);
+                _findAndRecordTierChange(new_t1 + new_t2, n);
             } else if (!isRemoval) {
-                // If a user was added, the user at old boundary between Tier 2 and Tier 3 might have changed
-                uint256 crossRank = old_t1 + old_t2; // Old boundary position
-                _findAndRecordTierChange(crossRank, n);
+                _findAndRecordTierChange(old_t1 + old_t2, n);
             }
         }
     }

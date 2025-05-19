@@ -884,7 +884,7 @@ contract TierBoundaryAndInterestTest is Test {
 
     //     // With 10 users, tier distribution should change:
     //     // Tier 1: Alice, Bob (20% of 10 = 2)
-    //     // Tier 2: Next 3 users (30% of 10 = 3)
+    //     // Tier 2: Charlie, Dave, Eve (30% of 10 = 3)
     //     // Tier 3: Remaining 5 users
 
     //     // Verify Bob has moved to Tier 1
@@ -1354,4 +1354,35 @@ contract TierBoundaryAndInterestTest is Test {
             uint256(userHistory[1].to), uint256(LayerEdgeStaking.Tier.Tier2), "User should have been promoted to Tier 2"
         );
     }
+
+    function test_AuditReport_TierBoundary_MultiplePromotions_NamedUsers() public {
+        address[10] memory users = [alice, bob, charlie, dave, eve, frank, grace, heidi, ivan, judy];
+        // Fund and stake for each user
+        for (uint256 i = 0; i < 9; i++) {
+            dealToken(users[i], MIN_STAKE);
+            vm.prank(users[i]);
+            staking.stake(MIN_STAKE);
+        }
+
+        dealToken(users[9], MIN_STAKE);
+        vm.prank(users[9]);
+        staking.stake(MIN_STAKE);
+
+        // Assert expected tiers
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier1), "Alice should be Tier1");
+        assertEq(uint256(staking.getCurrentTier(bob)), uint256(LayerEdgeStaking.Tier.Tier1), "Bob should be Tier1");
+        assertEq(uint256(staking.getCurrentTier(charlie)), uint256(LayerEdgeStaking.Tier.Tier2), "Charlie should be Tier2");
+        assertEq(uint256(staking.getCurrentTier(dave)), uint256(LayerEdgeStaking.Tier.Tier2), "Dave should be Tier2");
+        assertEq(uint256(staking.getCurrentTier(eve)), uint256(LayerEdgeStaking.Tier.Tier2), "Eve should be Tier2");
+        assertEq(uint256(staking.getCurrentTier(frank)), uint256(LayerEdgeStaking.Tier.Tier3), "Frank should be Tier3");
+
+        // Assert tier history for Bob, Dave, Eve (should have promotion events if logic is correct)
+        LayerEdgeStaking.TierEvent[] memory bobHistory = getTierHistory(bob);
+        LayerEdgeStaking.TierEvent[] memory daveHistory = getTierHistory(dave);
+        LayerEdgeStaking.TierEvent[] memory eveHistory = getTierHistory(eve);
+        assertTrue(bobHistory.length >= 2, "Bob should have a promotion event");
+        assertTrue(daveHistory.length >= 2, "Dave should have a promotion event");
+        assertTrue(eveHistory.length >= 2, "Eve should have a promotion event");
+    }
+
 }
