@@ -863,7 +863,7 @@ contract LayerEdgeStaking is
                 // Need to update all users between the old and new tier 2 boundaries
                 uint256 old_boundary = old_t1 + old_t2;
                 uint256 new_boundary = new_t1 + new_t2;
-                
+
                 if (new_boundary > old_boundary) {
                     // Promotion case: update all users from old_boundary+1 to new_boundary
                     for (uint256 rank = old_boundary + 1; rank <= new_boundary; rank++) {
