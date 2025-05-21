@@ -1371,7 +1371,9 @@ contract TierBoundaryAndInterestTest is Test {
         // Assert expected tiers
         assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier1), "Alice should be Tier1");
         assertEq(uint256(staking.getCurrentTier(bob)), uint256(LayerEdgeStaking.Tier.Tier1), "Bob should be Tier1");
-        assertEq(uint256(staking.getCurrentTier(charlie)), uint256(LayerEdgeStaking.Tier.Tier2), "Charlie should be Tier2");
+        assertEq(
+            uint256(staking.getCurrentTier(charlie)), uint256(LayerEdgeStaking.Tier.Tier2), "Charlie should be Tier2"
+        );
         assertEq(uint256(staking.getCurrentTier(dave)), uint256(LayerEdgeStaking.Tier.Tier2), "Dave should be Tier2");
         assertEq(uint256(staking.getCurrentTier(eve)), uint256(LayerEdgeStaking.Tier.Tier2), "Eve should be Tier2");
         assertEq(uint256(staking.getCurrentTier(frank)), uint256(LayerEdgeStaking.Tier.Tier3), "Frank should be Tier3");
@@ -1387,5 +1389,4 @@ contract TierBoundaryAndInterestTest is Test {
         }
         assertTrue(eveHistory.length >= 2, "Eve should have a promotion event");
     }
-
 }
