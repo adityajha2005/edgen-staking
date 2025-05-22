@@ -57,7 +57,7 @@ contract LayerEdgeStaking is
     event TierChanged(address indexed user, Tier to);
     event APYUpdated(Tier indexed tier, uint256 rate, uint256 timestamp);
     event RewardsDeposited(address indexed sender, uint256 amount);
-    event UnstakedQueued(address indexed user, uint256 amount);
+    event UnstakedQueued(address indexed user, uint256 index, uint256 amount);
 
     // User information
     struct UserInfo {
@@ -176,14 +176,6 @@ contract LayerEdgeStaking is
     function unstake(uint256 amount) external nonReentrant whenNotPaused {
         _unstake(amount, msg.sender);
     }
-
-    // /**
-    //  * @notice Unstake native tokens
-    //  * @param amount Amount to unstake
-    //  */
-    // // function unstakeNative(uint256 amount) external nonReentrant whenNotPaused {
-    // //     _unstake(amount, msg.sender, true);
-    // // }
 
     /**
      * @notice Complete a specific unstake request
@@ -759,7 +751,7 @@ contract LayerEdgeStaking is
         // Add unstake request instead of immediate transfer
         unstakeRequests[userAddr].push(UnstakeRequest({amount: amount, timestamp: block.timestamp, completed: false}));
 
-        emit UnstakedQueued(userAddr, amount);
+        emit UnstakedQueued(userAddr, unstakeRequests[userAddr].length - 1, amount);
     }
 
     function _completeUnstake(address userAddr, uint256 index, bool isNative) internal {

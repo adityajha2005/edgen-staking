@@ -2546,15 +2546,22 @@ contract LayerEdgeStakingTest is Test {
         assertEq(staking.totalStaked(), totalStaked, "Total staked amount incorrect");
 
         // Queue multiple partial unstakes
+        vm.expectEmit(true, false, false, false);
+        emit LayerEdgeStaking.UnstakedQueued(alice, 0, MIN_STAKE);
         staking.unstake(MIN_STAKE); // Unstake request 0
         //Assert out of tree as false
         (,,,,,, bool outOfTree,,) = staking.users(alice);
         assertFalse(outOfTree, "User should not be out of tree");
 
+        vm.expectEmit(true, false, false, false);
+        emit LayerEdgeStaking.UnstakedQueued(alice, 1, MIN_STAKE / 2);
         staking.unstake(MIN_STAKE / 2); // Unstake request 1
         //Assert out of tree as false
         (,,,,,, outOfTree,,) = staking.users(alice);
         assertFalse(outOfTree, "User should not be out of tree");
+
+        vm.expectEmit(true, false, false, false);
+        emit LayerEdgeStaking.UnstakedQueued(alice, 2, MIN_STAKE * 2 - 1000);
         staking.unstake(MIN_STAKE * 2 - 1000); // Unstake request 2 (leaving 1000 wei staked)
         //Assert out of tree as true
         (,,,,,, outOfTree,,) = staking.users(alice);
