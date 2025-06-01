@@ -930,9 +930,9 @@ contract LayerEdgeStaking is
             }
             // Handle case where Tier 2 count stays the same
             else if (isRemoval) {
-                _findAndRecordTierChange(new_t1 + new_t2, n);
-            } else if (!isRemoval) {
                 _findAndRecordTierChange(old_t1 + old_t2, n);
+            } else if (!isRemoval) {
+                _findAndRecordTierChange(new_t1 + new_t2, n);
             }
         }
     }

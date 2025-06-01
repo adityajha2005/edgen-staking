@@ -2682,4 +2682,30 @@ contract LayerEdgeStakingTest is Test {
         assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier3));
         assertEq(staking.rewardsReserve(), rewardsReserve - interestEarned);
     }
+
+    function test__checkBoundariesAndRecord_downgradingIssue() public {  
+        for (uint256 i = 1; i <= 15; i++) {  
+            address staker = makeAddr(string(abi.encodePacked("staker", i))); //staker 1 - 15  
+            vm.prank(admin);  
+            token.transfer(staker, MIN_STAKE);  
+              
+            vm.startPrank(staker);  
+            token.approve(address(staking), MIN_STAKE);  
+            staking.stake(MIN_STAKE);  
+            vm.stopPrank();  
+        }  
+         
+       address staker7 =  makeAddr(string(abi.encodePacked("staker", uint(7))));  
+  
+       (,LayerEdgeStaking.Tier expectedTier,,, LayerEdgeStaking.TierEvent[] memory tierHistory) = staking.getAllInfoOfUser(staker7);  
+  
+        LayerEdgeStaking.Tier lastUpdateTier = tierHistory[tierHistory.length -1].to;   
+  
+        //From audit report:
+        // expectedTier is the tier calculated from rank using getCurrentTier, while lastUpdateTier is the last update of the tier history which will be used to get the apy for reward cal for the current period  
+        //vm.assertLt(uint(expectedTier), uint(lastUpdateTier)); 
+
+        //Fix
+        assertEq(uint(expectedTier), uint(lastUpdateTier));  
+    }  
 }
