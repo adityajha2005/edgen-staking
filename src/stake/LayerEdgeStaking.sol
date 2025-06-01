@@ -673,6 +673,7 @@ contract LayerEdgeStaking is
 
     function _stake(uint256 amount, address userAddr, bool isNative) internal {
         require(amount > 0, "Cannot stake zero amount");
+        require(nextJoinId <= MAX_USERS, "Max users reached");
 
         UserInfo storage user = users[userAddr];
 
