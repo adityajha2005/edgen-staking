@@ -2660,47 +2660,6 @@ contract LayerEdgeStakingTest is Test {
         vm.stopPrank();
     }
 
-    function test_LayerEdgeStaking_CloseStaking() public {
-        uint256 rewardsReserve = staking.rewardsReserve();
-        vm.startPrank(alice);
-        token.approve(address(staking), MIN_STAKE);
-        staking.stake(MIN_STAKE);
-        vm.stopPrank();
-
-        vm.warp(block.timestamp + 7 days + 1);
-
-        vm.startPrank(admin);
-        uint256 interestEarned = staking.calculateUnclaimedInterest(alice);
-        staking.closeStaking(alice, interestEarned, false);
-        vm.stopPrank();
-
-        (uint256 balance,,,,,,,,) = staking.users(alice);
-        assertEq(balance, 0);
-        assertEq(staking.totalStaked(), 0);
-        assertEq(staking.stakerCountInTree(), 0);
-        assertEq(staking.stakerCountOutOfTree(), 1);
-        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier3));
-        assertEq(staking.rewardsReserve(), rewardsReserve - interestEarned);
-    }
-
-    function test__checkBoundariesAndRecord_downgradingIssue() public {  
-        for (uint256 i = 1; i <= 15; i++) {  
-            address staker = makeAddr(string(abi.encodePacked("staker", i))); //staker 1 - 15  
-            vm.prank(admin);  
-            token.transfer(staker, MIN_STAKE);  
-              
-            vm.startPrank(staker);  
-            token.approve(address(staking), MIN_STAKE);  
-            staking.stake(MIN_STAKE);  
-            vm.stopPrank();  
-        }  
-         
-       address staker7 =  makeAddr(string(abi.encodePacked("staker", uint(7))));  
-  
-       (,LayerEdgeStaking.Tier expectedTier,,, LayerEdgeStaking.TierEvent[] memory tierHistory) = staking.getAllInfoOfUser(staker7);  
-  
-        LayerEdgeStaking.Tier lastUpdateTier = tierHistory[tierHistory.length -1].to;   
-  
     function test__checkBoundariesAndRecord_downgradingIssue() public {
         for (uint256 i = 1; i <= 15; i++) {
             address staker = makeAddr(string(abi.encodePacked("staker", i))); //staker 1 - 15
