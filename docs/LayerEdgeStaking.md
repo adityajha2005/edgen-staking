@@ -9,7 +9,8 @@ The LayerEdgeStaking contract implements a tiered staking system for EDGEN token
 - **Tiered Staking System**: Three tiers with different reward rates
 - **Dynamic Tier Allocation**: Tiers determined by staking position and total active stakers
 - **Reward Mechanisms**: Simple claiming or compounding options
-- **Unstaking Rules**: Unstaking window of 7 days and permanent tier downgrade after unstaking
+- **Unstaking Rules**: Two-step unstaking process with a 7-day waiting period
+- **Native Token Support**: Support for both ERC20 tokens and native tokens (via WETH wrapper)
 
 ## Core Components
 
@@ -42,12 +43,15 @@ The tier allocation is dynamically calculated based on the total number of activ
 For each staker, the contract tracks:
 
 - Current staked balance
-- Deposit time
 - Last claim time
 - Interest earned but not claimed
 - Total claimed interest
 - Join ID (position in the staking queue)
+- Whether the user is active
+- Whether the user is out of the tree (permanently in Tier 3)
+- Whether the user's first deposit was more than minimum stake amount
 - Tier change history
+- Unstake requests
 
 ### Fenwick Tree Implementation
 
@@ -80,38 +84,51 @@ This allows for O(log n) time complexity for:
 └──────────────┘     └───────────────┘     └────────────────┘
 ```
 
-1. User calls `stake(amount)` function
+1. User calls `stake(amount)` or `stakeNative()` function
 2. Contract updates any pending interest
-3. Tokens are transferred to the contract
-4. If first time staking, user is assigned a join ID
-5. User's balance and staking details are updated
-6. User's tier is determined and recorded
-7. Tier boundaries are checked and updated if necessary
+3. Tokens are transferred to the contract (or converted from native tokens)
+4. If first time staking with more than minimum stake, user is assigned a join ID and added to the tree
+5. If first time staking with less than minimum stake, user is marked as out of the tree and permanently assigned to Tier 3
+6. User's balance and staking details are updated
+7. User's tier is determined and recorded
+8. Tier boundaries are checked and updated if necessary
 
-### Unstaking Flow
+### Unstaking Flow (Two-Step Process)
 
 ```
 ┌──────────┐     ┌───────────────┐     ┌────────────────┐
 │  User    │     │ Check Unstake │     │ Update User's  │
-│ Unstakes │────▶│ Eligibility   │────▶│ Interest       │
-│  EDGEN   │     │               │     │                │
+│ Requests │────▶│ Eligibility   │────▶│ Interest       │
+│ Unstake  │     │               │     │                │
 └──────────┘     └───────────────┘     └────────────────┘
                                                │
                                                ▼
 ┌──────────────┐     ┌───────────────┐     ┌────────────────┐
-│Transfer EDGEN│     │ Check & Update│     │ Update User    │
-│  to User     │◀────│ Tier          │◀────│ State & Tier   │
-│              │     │ Boundaries    │     │                │
+│ Create       │     │ Check & Update│     │ Update User    │
+│ Unstake      │◀────│ Tier          │◀────│ State & Balance│
+│ Request      │     │ Boundaries    │     │                │
 └──────────────┘     └───────────────┘     └────────────────┘
 ```
 
+Then, after the 7-day waiting period:
+
+```
+┌──────────┐     ┌───────────────┐     ┌────────────────┐
+│  User    │     │ Check Request │     │ Transfer EDGEN │
+│ Completes│────▶│ Eligibility & │────▶│  to User       │
+│ Unstake  │     │ Waiting Period│     │                │
+└──────────┘     └───────────────┘     └────────────────┘
+```
+
 1. User calls `unstake(amount)` function
-2. Contract checks that user has sufficient stake and the unstaking window (7 days) has passed
+2. Contract checks that user has sufficient stake
 3. Contract updates any pending interest
 4. User's balance is reduced and staking details updated
-5. User is marked as having unstaked, which permanently downgrades them to Tier 3
+5. If balance falls below minimum stake, user is marked as out of the tree and permanently assigned to Tier 3
 6. Tier boundaries are checked and updated if necessary
-7. Tokens are transferred back to the user
+7. An unstake request is created with timestamp
+8. After 7 days, user calls `completeUnstake(index)` or `completeUnstakeNative(index)`
+9. If waiting period has passed, tokens are transferred back to the user
 
 ### Interest Calculation & Claiming
 
@@ -134,6 +151,8 @@ Where:
 - TimeStaked is the duration since last claim in seconds
 - SECONDS_IN_YEAR is 31,536,000 (365 days)
 - PRECISION is 10^18 (to handle decimal calculations)
+
+The contract maintains a history of APY changes for each tier to ensure accurate interest calculations across APY changes.
 
 ### Tier Transitions
 
@@ -190,10 +209,6 @@ In this example:
   - Users #4 and #5 remain in Tier 3
   - Users #6 and #7 join as Tier 3
 
-This example demonstrates how a user (User #3) can move from Tier 3 to Tier 2 when new users join, due to the recalculation of tier boundaries as the total number of users increases. With 7 total users, the tier 2 allocation naturally increases to 2 users without any special minimum rules being applied.
-
-
-
 When a user joins or leaves, the contract:
 1. Calculates new tier boundaries
 2. Identifies any users crossing tier boundaries
@@ -202,11 +217,11 @@ When a user joins or leaves, the contract:
 Note: When a user joins or leaves the system, at most two people's tier will be changed and the method `_checkBoundariesAndRecord` will find exactly whose tier is going to change and record them.
 
 ### Key points to note
-- Any user who stakes more than `minStakeAmount` will be add to the tree/tier system. They might get promoted/demoted based on FCFS condition as mentioned above.
-- Any user who stakes less than `minStakeAmount` will be in Tier3 permanently and out of the tree/tier system(won't get promoted) even if they stake more later.
-- Any user who unstakes and if the balance goes less than `minStakeAmount` they will also be moved out of the tree/tier system and will be in Tier 3 permanently.
-- Any users who is out of the tree/system can stake more at any time but will only be earning interest at Tier3 apy.
-- If compounding is enabled globally, all the users should be able to compound and earn interest with respective to their tier. This also includes user whose balance is less than `minStakeAmount` and in Tier3.
+- Any user who stakes more than `minStakeAmount` will be added to the tree/tier system. They might get promoted/demoted based on FCFS condition as mentioned above.
+- Any user who stakes less than `minStakeAmount` will be in Tier3 permanently and out of the tree/tier system (won't get promoted) even if they stake more later.
+- Any user who unstakes and if the balance goes less than `minStakeAmount` will also be moved out of the tree/tier system and will be in Tier 3 permanently.
+- Any users who is out of the tree/system can stake more at any time but will only be earning interest at Tier3 APY.
+- If compounding is enabled globally, all the users should be able to compound and earn interest with respect to their tier. This also includes users whose balance is less than `minStakeAmount` and in Tier3.
 
 ## Administrative Functions
 
@@ -242,6 +257,19 @@ Rewards can be deposited by:
 
 Rewards are tracked in a separate `rewardsReserve` balance to ensure sufficient funds are available for claiming.
 
+## Native Token Support
+
+The contract supports both ERC20 token staking and native token staking:
+
+- `stake(amount)` - For staking ERC20 tokens
+- `stakeNative()` - For staking native tokens (automatically wrapped to WETH)
+- `claimInterest()` - For claiming ERC20 token rewards
+- `claimInterestNative()` - For claiming rewards as native tokens
+- `completeUnstake(index)` - For completing unstaking of ERC20 tokens
+- `completeUnstakeNative(index)` - For completing unstaking as native tokens
+
+This dual support allows for flexibility in user interactions with the staking system.
+
 ## Security Considerations
 
 The contract implements several security measures:
@@ -257,9 +285,10 @@ The contract implements several security measures:
 The contract emits the following events:
 
 - `Staked`: When a user stakes tokens
-- `Unstaked`: When a user unstakes tokens
+- `Unstaked`: When a user completes unstaking tokens
+- `UnstakedQueued`: When a user queues an unstake request
 - `RewardClaimed`: When a user claims rewards
-- `TierDowngraded`: When a user's tier is downgraded
+- `TierChanged`: When a user's tier changes
 - `APYUpdated`: When APY rates are updated
 - `RewardsDeposited`: When rewards are deposited
 
@@ -280,7 +309,9 @@ The contract emits the following events:
 - `users`: Mapping of user addresses to their staking information
 - `stakerAddress`: Mapping of join IDs to staker addresses
 - `stakerTierHistory`: History of tier changes for each user
-- `activeStakerCount`: Total number of active stakers
+- `unstakeRequests`: Queue of unstake requests per user
+- `stakerCountInTree`: Number of stakers in the tiering tree
+- `stakerCountOutOfTree`: Number of stakers permanently in Tier 3
 - `totalStaked`: Total amount of tokens staked
 - `rewardsReserve`: Available rewards balance
 - `nextJoinId`: Next join ID to assign
@@ -322,12 +353,17 @@ The contract uses OpenZeppelin's UUPS (Universal Upgradeable Proxy Standard) pat
    - Emergency pause functionality
    - Admin function access controls
 
+5. **Unstaking Process**
+   - Two-step unstaking security
+   - Waiting period enforcement
+   - Request queue management
+
 ### Known Limitations
 
 1. **Tier System**
    - Maximum of 100,000,000 users (MAX_USERS constant)
    - Tier percentages are fixed (20%, 30%, 50%)
-   - Permanent tier downgrade after unstaking
+   - Permanent tier downgrade after balance falls below minimum stake
 
 2. **Staking Rules**
    - Minimum stake amount requirement
@@ -357,7 +393,7 @@ The contract uses OpenZeppelin's UUPS (Universal Upgradeable Proxy Standard) pat
    - Direct ETH transfer vulnerabilities
    - Potential balance tracking issues
 
-Note: The staking contract will be deployed on Ethereum(or other evems) and on LayerEdge's L1 (EVM compatible). 
-On Ethereum, the staking token will be a simple ERC20 contract(Openzeppelin's implementation) of $EDGEN token (only $EDGEN).
+Note: The staking contract will be deployed on Ethereum (or other EVMs) and on LayerEdge's L1 (EVM compatible). 
+On Ethereum, the staking token will be a simple ERC20 contract (OpenZeppelin's implementation) of $EDGEN token (only $EDGEN).
 On LayerEdge's L1, the staking token will be a WETH9 implementation, a wrapper of native token $EDGEN.
 
