@@ -673,6 +673,7 @@ contract LayerEdgeStaking is
 
     function _stake(uint256 amount, address userAddr, bool isNative) internal {
         require(amount > 0, "Cannot stake zero amount");
+        require(nextJoinId <= MAX_USERS, "Max users reached");
 
         UserInfo storage user = users[userAddr];
 
@@ -892,9 +893,9 @@ contract LayerEdgeStaking is
             }
             // Handle case where Tier 2 count stays the same
             else if (isRemoval) {
-                _findAndRecordTierChange(new_t1 + new_t2, n);
-            } else if (!isRemoval) {
                 _findAndRecordTierChange(old_t1 + old_t2, n);
+            } else if (!isRemoval) {
+                _findAndRecordTierChange(new_t1 + new_t2, n);
             }
         }
     }
