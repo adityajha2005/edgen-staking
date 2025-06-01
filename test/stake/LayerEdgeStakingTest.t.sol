@@ -2726,6 +2726,8 @@ contract LayerEdgeStakingTest is Test {
 
         //Fix
         assertEq(uint256(expectedTier), uint256(lastUpdateTier));
+    }
+
     function test_LayerEdgeStaking_CloseStaking() public {
         uint256 rewardsReserve = staking.rewardsReserve();
         vm.startPrank(alice);
