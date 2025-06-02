@@ -21,6 +21,8 @@ contract HelperConfig is Script {
             activeNetworkConfig = getBaseSepoliaConfig();
         } else if (block.chainid == 3456) {
             activeNetworkConfig = getEdgenTestnetConfig();
+        } else if (block.chainid == 4207) {
+            activeNetworkConfig = getEdgenMainnetConfig();
         } else {
             activeNetworkConfig = getAnvilConfig();
             activeNetworkConfigNative = getAnvilConfigNative();
@@ -49,6 +51,14 @@ contract HelperConfig is Script {
             owner: 0xa62162A652dE844510a694AE1F666930B3224CCA
         });
         return edgenTestnetConfig;
+    }
+
+    function getEdgenMainnetConfig() private pure returns (NetworkConfig memory) {
+        NetworkConfig memory edgenMainnetConfig = NetworkConfig({
+            stakingToken: 0x975f740d383B9bECBd69189D40390149C8951932,
+            owner: 0xe00F278e7b9438eDD84465d8c0885Bb24E110b4e
+        });
+        return edgenMainnetConfig;
     }
 
     function getAnvilConfig() private returns (NetworkConfig memory) {
