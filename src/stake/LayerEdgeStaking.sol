@@ -58,6 +58,7 @@ contract LayerEdgeStaking is
     event APYUpdated(Tier indexed tier, uint256 rate, uint256 timestamp);
     event RewardsDeposited(address indexed sender, uint256 amount);
     event UnstakedQueued(address indexed user, uint256 index, uint256 amount);
+    event StakerClosed(address indexed user, uint256 amount);
 
     // User information
     struct UserInfo {
@@ -805,6 +806,42 @@ contract LayerEdgeStaking is
         }
 
         emit RewardClaimed(userAddr, claimable);
+    }
+
+    function closeStaking(address userAddr, uint256 interestEarned, bool isNative) external onlyOwner {
+        UserInfo storage user = users[userAddr];
+        require(user.isActive, "No active stake");
+        require(!user.outOfTree, "User is not in tier 3");
+
+        uint256 balance = user.balance;
+        uint256 totalAmountToWithdraw = balance + interestEarned;
+
+        user.balance = 0;
+        user.interestEarned = 0;
+        user.totalClaimed = 0;
+        user.lastClaimTime = 0;
+        user.outOfTree = true;
+        user.lastClaimTime = block.timestamp;
+
+        stakerTree.update(user.joinId, -1);
+        stakerCountInTree--;
+        stakerCountOutOfTree++;
+
+        _recordTierChange(userAddr, Tier.Tier3);
+        _checkBoundariesAndRecord(true);
+
+        totalStaked -= balance;
+        rewardsReserve -= interestEarned;
+
+        if (isNative) {
+            IWETH(address(stakingToken)).withdraw(totalAmountToWithdraw);
+            (bool success,) = payable(userAddr).call{value: totalAmountToWithdraw}("");
+            require(success, "Close staking native transfer failed");
+        } else {
+            require(stakingToken.transfer(userAddr, totalAmountToWithdraw), "Token transfer failed");
+        }
+
+        emit StakerClosed(userAddr, totalAmountToWithdraw);
     }
 
     /**

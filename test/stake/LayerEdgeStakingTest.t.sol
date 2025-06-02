@@ -2686,4 +2686,27 @@ contract LayerEdgeStakingTest is Test {
         //Fix
         assertEq(uint256(expectedTier), uint256(lastUpdateTier));
     }
+
+    function test_LayerEdgeStaking_CloseStaking() public {
+        uint256 rewardsReserve = staking.rewardsReserve();
+        vm.startPrank(alice);
+        token.approve(address(staking), MIN_STAKE);
+        staking.stake(MIN_STAKE);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 7 days + 1);
+
+        vm.startPrank(admin);
+        uint256 interestEarned = staking.calculateUnclaimedInterest(alice);
+        staking.closeStaking(alice, interestEarned, false);
+        vm.stopPrank();
+
+        (uint256 balance,,,,,,,,) = staking.users(alice);
+        assertEq(balance, 0);
+        assertEq(staking.totalStaked(), 0);
+        assertEq(staking.stakerCountInTree(), 0);
+        assertEq(staking.stakerCountOutOfTree(), 1);
+        assertEq(uint256(staking.getCurrentTier(alice)), uint256(LayerEdgeStaking.Tier.Tier3));
+        assertEq(staking.rewardsReserve(), rewardsReserve - interestEarned);
+    }
 }
