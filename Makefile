@@ -36,5 +36,5 @@ deploy-staking-edgen-testnet:
 
 deploy-staking-edgen-mainnet:
 	@rm -rf out && forge script script/DeployLayerEdgeStaking.s.sol:DeployLayerEdgeStaking --rpc-url $(EDGEN_MAINNET_RPC_URL) \
-		--private-key $(EDGEN_KEY) --broadcast -vvvv --verify --slow --etherscan-api-key $(BASESCAN_API_KEY) -vvvv --verifier=blockscout \
+		--private-key $(EDGEN_KEY) --broadcast --resume -vvvv --verify --slow --etherscan-api-key $(BASESCAN_API_KEY) -vvvv --verifier=blockscout \
 		--verifier-url $(EDGEN_MAINNET_BLOCKSCOUT_URL) --legacy
