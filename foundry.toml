@@ -4,6 +4,9 @@ out = "out"
 libs = ["lib"]
 solc = "0.8.23"
 
+[fuzz]
+runs=256
+
 [etherscan]
 unknown_chain = { key = "${BASESCAN_API_KEY}", chain = "84532", url = "https://api-sepolia.basescan.org/api" }
 edgenmainnet = { key = "${BASESCAN_API_KEY}", chain = "4207", url = "https://edgenscan.io/api" }
